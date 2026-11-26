@@ -24,19 +24,24 @@ Measured 2026-11-26 with an unpaired test request to Chad's key: Amber answered
 
 `Nip46Pool` takes an optional client secret key (third constructor argument).
 With it, the pool decrypts each kind 24133 event before it reaches nostr-tools
-and drops a response whose `error` is exactly `no permission`
-(`src/lib/nip46-unknown-refusal.ts`). The request then waits for the next
-answer, or fails on its normal timeout (30 s, nostr-tools' default). An event it
+and drops a response whose `error` is exactly `no permission`, or exactly
+`invalid secret` (Amber's answer to a bunker `connect` whose secret it does not
+know, `connectSecretRejection` in Amber's `Nip46Requests.kt`; found in the
+review) (`src/lib/nip46-unknown-refusal.ts`). The request then waits for the
+next answer, or fails on its normal timeout: 10 s for a bunker:// login
+("Bunker connect timeout", and its first get_public_key), 30 s (nostr-tools' default) for other requests. An event it
 cannot decrypt or parse is passed on unchanged. `NostrConnectionSigner` (QR) and
 `BunkerSigner` (bunker://, also a restored login) pass their client key.
 
 ## Costs
 
-- An app that Amber really does not know, with Amber as its only signer, gets a
-  timeout after 30 s instead of the error at once. Chad does not use Amber in
-  Jumble Chad.
-- Only that exact text is dropped. Other errors (`user rejected`, Clave's
-  `Client not paired …`) still end the request at once.
+- An app that Amber really does not know (or has revoked), with Amber as its
+  only signer, gets a timeout instead of the error at once. A wrong secret in a
+  bunker:// link for Amber also ends in the 10 s timeout. Chad does not use
+  Amber in Jumble Chad.
+- Only those exact texts are dropped. Other errors (`user rejected`, Clave's
+  `Client not paired …` and `Invalid or missing secret`) still end the request
+  at once.
 
 ## Not done
 

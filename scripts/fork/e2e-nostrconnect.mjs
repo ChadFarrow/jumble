@@ -11,10 +11,12 @@
 // ping, and refuses sign_event, so the app can publish nothing for the
 // throwaway account. It sends only kind 24133 events (ephemeral, encrypted).
 //
-// "Amber" scenarios: a second signer with the same key answers every request
-// with "no permission" at once, and the real answer comes 300 ms later. This is
+// "Amber" scenarios: a second signer with the same key refuses every request
+// at once, with Amber's texts ("invalid secret" for connect, "no permission"
+// for the rest), and the real answer comes 300 ms (or 3 s) later. This is
 // Chad's setup (Amber and Clave hold the same key, 2026-11-26): the app must
-// ignore the refusal (src/lib/nip46-unknown-refusal.ts) and log in.
+// ignore the refusals (src/lib/nip46-unknown-refusal.ts), say so in the
+// console, and log in.
 //
 // The dev app uses the jumble-dev data folder. The test logs out before each
 // scenario and at the end.
@@ -104,7 +106,10 @@ async function startSigner({ relays, amber, switchRelays, bunkerSecret, realDela
     if (requests.some((r) => r.id === req.id)) return
     requests.push({ at: Date.now(), id: req.id, method: req.method })
     const onRelays = answerRelays
-    if (amber) void send(ev.pubkey, { id: req.id, result: '', error: 'no permission' }, onRelays)
+    // Amber's texts (Nip46Requests.kt, Nip46Admission.kt): an unknown connect
+    // secret, and any request from an app it has no connection with.
+    const refusal = req.method === 'connect' ? 'invalid secret' : 'no permission'
+    if (amber) void send(ev.pubkey, { id: req.id, result: '', error: refusal }, onRelays)
     let payload
     if (req.method === 'get_public_key') payload = { id: req.id, result: pk }
     else if (req.method === 'switch_relays')
@@ -147,6 +152,7 @@ const app = await _electron.launch({
 
 const logs = []
 let page
+let ignoredRefusals = 0
 const logOut = async () => {
   await page.evaluate(() => {
     localStorage.setItem('accounts', '[]')
@@ -195,7 +201,8 @@ try {
   page.on('pageerror', (e) => logs.push(`${ts()} [pageerror] ${e.message}`.slice(0, 300)))
   page.on('console', (m) => {
     const text = m.text()
-    if (/nip46|NostrConnection|bunker|signer/i.test(text))
+    if (text.startsWith('[nip46] ignored a refusal')) ignoredRefusals++
+    else if (/nip46|NostrConnection|bunker|signer/i.test(text))
       logs.push(`${ts()} [console.${m.type()}] ${text}`.slice(0, 300))
   })
   await page.waitForLoadState('domcontentloaded')
@@ -211,6 +218,7 @@ try {
     await logOut()
     const connectionString = await openRemoteSignerPage()
     let signer
+    ignoredRefusals = 0
     try {
       if (s.flow === 'qr') {
         const uri = new URL(connectionString)
@@ -261,6 +269,9 @@ try {
         errors: login.errors,
         requests: signer.requests.map((r) => r.method)
       })
+      // The refusals reached the app and were dropped (not just lost on the way).
+      if (s.amber)
+        record(`${s.name}: the app ignored the refusals`, ignoredRefusals > 0, { ignoredRefusals })
     } finally {
       signer?.close()
     }

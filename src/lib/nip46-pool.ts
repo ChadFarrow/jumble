@@ -14,7 +14,7 @@ export class Nip46Pool extends AbstractSimplePool {
   private configuredUrls: Set<string>
   private closers = new Set<() => void>()
   private disposed = false
-  // Fork: drops a "no permission" answer from another signer of the same key.
+  // Fork: drops a refusal from another signer of the same key (Amber).
   private isUnknownRefusal?: (event: Event) => boolean
 
   constructor(
@@ -54,7 +54,7 @@ export class Nip46Pool extends AbstractSimplePool {
           ? (event) => {
               if (isUnknownRefusal(event)) {
                 console.warn(
-                  '[nip46] ignored a "no permission" answer: another signer of this key does not know this app'
+                  '[nip46] ignored a refusal from another signer of this key that does not know this app'
                 )
                 return
               }

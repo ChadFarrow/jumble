@@ -128,6 +128,13 @@ describe('NIP-46: a refusal from another signer of the same key', () => {
     await expect(signer.getPublicKey()).resolves.toBe(remotePubkey)
   })
 
+  it('uses the second answer when the first refuses connect with "invalid secret"', async () => {
+    // Amber's answer to a connect whose secret it does not know (Nip46Requests.kt).
+    answer = (method) =>
+      method === 'connect' ? [{ error: 'invalid secret' }, { result: 'ack' }] : [null, null]
+    await expect(signer.connect()).resolves.toBeUndefined()
+  })
+
   it('waits for the timeout when "no permission" is the only answer', async () => {
     answer = () => [{ error: 'no permission' }, null]
     const result = signer.ping().then(
