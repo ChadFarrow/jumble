@@ -1,8 +1,10 @@
 import { app, type BrowserWindow } from 'electron'
 import type { Event as NEvent, EventTemplate, Filter, VerifiedEvent } from 'nostr-tools'
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import WebSocket from 'ws'
 import { SmartPool, type SmartPoolOptions } from '../../src/lib/smart-pool'
+import { UnreachableRelays } from '../../src/lib/unreachable-relays'
 import {
   IPC_CHANNELS,
   TRelayTransportObservation,
@@ -12,6 +14,7 @@ import {
   TSubEosePayload,
   TSubEventPayload
 } from '../shared/ipc-types.js'
+import { createUnreachableRelayStorage } from './unreachable-relays-store.js'
 
 type SubCloser = { close: () => void }
 
@@ -39,7 +42,13 @@ export class RelayManager {
   private pool = new SmartPool({
     observe: (observation) => this.sendToRenderer(IPC_CHANNELS.observation, observation),
     websocketImplementation:
-      ElectronWebSocket as unknown as SmartPoolOptions['websocketImplementation']
+      ElectronWebSocket as unknown as SmartPoolOptions['websocketImplementation'],
+    // Fork: reads to a relay that recently gave no answer end at once.
+    unreachableRelays: new UnreachableRelays(
+      createUnreachableRelayStorage(() =>
+        path.join(app.getPath('userData'), 'unreachable-relays.json')
+      )
+    )
   })
   private subs = new Map<string, SubCloser>()
   private pendingAuthRequests = new Map<

@@ -60,6 +60,21 @@ so upstream merges stay clean.
   `href`, so they get no Copy Link; an `<a>` to the app's own origin would be
   copied as `https://jumble.social/...`.
 
+- Reads skip relays that recently gave no answer (`src/lib/unreachable-relays.ts`,
+  small hooks in `src/lib/managed-relay.ts` and `src/lib/smart-pool.ts`; on only
+  in Electron main's `RelayManager`, store in `electron/main/unreachable-relays-store.ts`).
+  A connect attempt with no open socket after 8 s (a timeout, or a REQ closed
+  by its caller), while another relay completed a handshake, marks the relay.
+  A read to a marked relay then ends at once (EOSE, then close with
+  `relay connection skipped: no answer recently`) and opens no socket. A read
+  5 min after the last check, or after the online event, also starts one
+  background connect; any handshake to the relay (also a publish) clears the
+  mark. Publish and auth still try a marked relay. Fast failures (refused,
+  HTTP 503) are not marked. The marks are in `unreachable-relays.json` in
+  userData (dev: `jumble-dev`): at most 500, dropped after 30 days without a
+  check. Delete the file (app quit) to forget them. Design:
+  `docs/superpowers/specs/2026-11-26-unreachable-relays-design.md`.
+
 - Notifications do not wait for the slowest read relay
   (`src/services/notification.service.ts`): each relay's events are merged into
   the list when that relay answers (EOSE). The loading bar and "load more" still
@@ -85,17 +100,33 @@ so upstream merges stay clean.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
   before a real-app run.
 - Real app, notifications: `node scripts/fork/e2e-notifications.mjs` (renderer
-  rebuilt first). It clears the jumble-dev IndexedDB and localStorage, logs in
+  rebuilt first). It clears the jumble-dev IndexedDB, logs in
   read-only with an npub (no key: it cannot publish; it sends REQs only), holds
   back one read relay's answer for 8 s in the main process and checks that the
   first notifications show before it. Env: `JUMBLE_E2E_NPUB`,
   `JUMBLE_E2E_SLOW_RELAY` (default `wss://hist.nostr.land/`, must be one of the
-  npub's read relays), `JUMBLE_E2E_SLOW_MS` (default 8000). On a cold start the
-  notification REQ comes about 10 s after the reload: the account's relay-list
-  and profile requests go to `BIG_RELAY_URLS`, and the app waits for
-  `wss://nos.lol/`, which does not answer from Chad's home network (measured
-  2026-11-26), until the 10 s EOSE timeout. Never send COUNT to Chad's Haven (`podtards.com`): its COUNT handling
-  has a known CPU loop.
+  npub's read relays), `JUMBLE_E2E_SLOW_MS` (default 8000). On a cold start with
+  no `unreachable-relays.json` the notification REQ comes about 10 s after the
+  reload: the account's relay-list and profile requests go to `BIG_RELAY_URLS`,
+  and the app waits for `wss://nos.lol/`, which gives no answer from Chad's home
+  network (measured 2026-11-26), until the 10 s EOSE timeout. Once the app has
+  marked nos.lol (below), it comes in about 0.3 s. Never send COUNT to Chad's
+  Haven (`podtards.com`): its COUNT handling has a known CPU loop.
+- Real app, unreachable relays: `node scripts/fork/e2e-unreachable-relays.mjs`
+  (renderer rebuilt first). Two launches of the dev app, logged in read-only
+  with an npub. Launch 1 starts with no `unreachable-relays.json` and waits until
+  the app marks `JUMBLE_E2E_DEAD_RELAY` (default `wss://nos.lol/`; it must give
+  no answer from the test machine). Launch 2 checks that every REQ to it ends
+  in < 200 ms with the skip reason and that the notification REQ starts < 3 s
+  after the reload. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB`
+  (default ChadF), `JUMBLE_E2E_DEAD_RELAY`.
+- Logging in from a test: the app backs localStorage up to main
+  (`renderer-state.enc` in userData, 50 ms after a change) and restores a newer
+  backup on reload. So clear IndexedDB only from main
+  (`clearStorageData({ storages: ['indexdb'] })`): a localStorage clear made from
+  main is undone by the restore. A `localStorage.clear()` in the page removes
+  keys the app needs and logs out. Overwrite `accounts` and `currentAccount`,
+  then wait 500 ms before the reload. A logged-out start sends no REQ.
 - On macOS a role item (`copy`, `paste` ...) sends its action to the key window,
   like Edit > Copy; `MenuItem.click()` from a script does nothing for it. The
   test window is not key (making it key would take the user's keyboard focus),
