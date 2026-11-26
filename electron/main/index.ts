@@ -13,6 +13,7 @@ import {
 import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
+import { attachContextMenu } from './context-menu.js'
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc.js'
 import { MediaServer } from './media-server.js'
 import { PasswordCrypto } from './password-crypto.js'
@@ -130,6 +131,7 @@ function createWindow() {
   })
 
   attachWindowStatePersistence(win)
+  attachContextMenu(win, () => rendererOrigin)
   manager.attachWindow(win)
   updater.attachWindow(win)
 
