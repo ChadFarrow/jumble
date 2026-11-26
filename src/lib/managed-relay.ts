@@ -1,7 +1,7 @@
 import { AbstractRelay, SendingOnClosedConnection } from 'nostr-tools/abstract-relay'
 import { IRelay, TSubCloser, TSubHandlers } from '../types/relay-pool'
 import type { RelayObserver } from './relay-observation'
-import type { ReadDecision, RelayReachability } from './unreachable-relays'
+import type { RelayReachability } from './unreachable-relays'
 
 const DEFAULT_CONNECTION_TIMEOUT = 10 * 1000
 const RETRY_DELAYS_MS = [1_000, 2_000]
@@ -64,9 +64,6 @@ export class ManagedRelay implements IRelay {
   }
 
   subscribe(filters: Parameters<IRelay['subscribe']>[0], handlers: TSubHandlers): TSubCloser {
-    const skip = this.reachability?.readDecision(this.url)
-    if (skip) return this.skipSubscription(handlers, skip)
-
     this.clearReleaseTimer()
     const logical: LogicalSubscription = {
       filters: cloneFilters(filters),
@@ -78,7 +75,16 @@ export class ManagedRelay implements IRelay {
     if (this.connection?.connected) {
       this.attachSubscription(logical, this.connection)
     } else {
-      this.connectForSubscriptions()
+      const skip = this.reachability?.readDecision(this.url)
+      if (skip) {
+        // Fork: the relay recently gave no answer. End the read at once (after
+        // subscribe() returns: callers store the closer first), but keep the
+        // REQ registered: a later handshake (re-check, publish) attaches it.
+        queueMicrotask(() => this.notifyEose(logical))
+        if (skip.recheck) this.recheck()
+      } else {
+        this.connectForSubscriptions()
+      }
     }
 
     return {
@@ -101,6 +107,10 @@ export class ManagedRelay implements IRelay {
       this.releaseIfUnused()
       return
     }
+
+    // Fork: a relay that recently gave no answer connects only for its re-check.
+    if (!this.connection?.connected && this.reachability?.readDecision(this.url)?.recheck === false)
+      return
 
     // AbstractRelay's heartbeat detects half-open sockets; its close callback
     // schedules recovery. Reuse healthy or pending connections and reconnect
@@ -331,27 +341,11 @@ export class ManagedRelay implements IRelay {
     if (this.subscriptions.size === 0) this.clearRetryTimer()
   }
 
-  /** Fork: end a read at once, with no connection. Settles after subscribe()
-   * returns, because callers store the closer first (RelayManager.subscribe). */
-  private skipSubscription(handlers: TSubHandlers, decision: ReadDecision): TSubCloser {
-    let open = true
-    queueMicrotask(() => {
-      if (!open) return
-      open = false
-      // Same order as failSubscriptions: EOSE first, so the aggregate settles.
-      handlers.oneose?.()
-      handlers.onclose?.(decision.reason)
+  /** Fork: one background connect to a relay that recently gave no answer. */
+  private recheck() {
+    void this.withRelay(async () => undefined).catch(() => {
+      // attemptEnded() keeps the mark when the check fails.
     })
-    if (decision.recheck) {
-      void this.withRelay(async () => undefined).catch(() => {
-        // attemptEnded() keeps the mark when the check fails.
-      })
-    }
-    return {
-      close: () => {
-        open = false
-      }
-    }
   }
 
   private connectForSubscriptions() {
@@ -363,6 +357,14 @@ export class ManagedRelay implements IRelay {
 
   private recordConnectionFailure(error: unknown) {
     if (!this.networkOnline || this.subscriptions.size === 0) return
+
+    if (this.reachability?.has(this.url)) {
+      // Fork: no retries for a relay that gave no answer. Its REQs end now and
+      // stay registered until a re-check or publish handshake attaches them.
+      this.clearRetryTimer()
+      for (const logical of Array.from(this.subscriptions)) this.notifyEose(logical)
+      return
+    }
 
     this.connectionFailures++
     const reason = error instanceof Error ? error.message : String(error)

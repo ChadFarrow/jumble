@@ -64,14 +64,17 @@ so upstream merges stay clean.
   small hooks in `src/lib/managed-relay.ts` and `src/lib/smart-pool.ts`; on only
   in Electron main's `RelayManager`, store in `electron/main/unreachable-relays-store.ts`).
   A connect attempt with no open socket after 8 s (a timeout, or a REQ closed
-  by its caller), while another relay completed a handshake, marks the relay.
-  A read to a marked relay then ends at once (EOSE, then close with
-  `relay connection skipped: no answer recently`) and opens no socket. A read
-  5 min after the last check, or after the online event, also starts one
-  background connect; any handshake to the relay (also a publish) clears the
-  mark. Publish and auth still try a marked relay. Fast failures (refused,
-  HTTP 503) are not marked. The marks are in `unreachable-relays.json` in
-  userData (dev: `jumble-dev`): at most 500, dropped after 30 days without a
+  by its caller), while another relay completed a handshake and no network
+  change came in the 10 s before or during it, marks the relay. A read to a
+  marked relay then gets EOSE at once and opens no socket; the REQ stays
+  registered and attaches when a later handshake to that relay lands. Failed
+  attempts to a marked relay are not retried. A read (or a relay health check)
+  30 s after a new mark, then 5 min after the last check, or after the online
+  event, also starts one background connect; any handshake to the relay (also a
+  publish) clears the mark. Publish and auth still try a marked relay. Fast
+  failures (refused, HTTP 503) are not marked. The marks are in
+  `unreachable-relays.json` in userData (dev: `jumble-dev`): at most 500,
+  dropped after 30 days without a
   check. Delete the file (app quit) to forget them. Design:
   `docs/superpowers/specs/2026-11-26-unreachable-relays-design.md`.
 
@@ -116,9 +119,9 @@ so upstream merges stay clean.
   (renderer rebuilt first). Two launches of the dev app, logged in read-only
   with an npub. Launch 1 starts with no `unreachable-relays.json` and waits until
   the app marks `JUMBLE_E2E_DEAD_RELAY` (default `wss://nos.lol/`; it must give
-  no answer from the test machine). Launch 2 checks that every REQ to it ends
-  in < 200 ms with the skip reason and that the notification REQ starts < 3 s
-  after the reload. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB`
+  no answer from the test machine). Launch 2 checks that every REQ to it gets
+  EOSE in < 200 ms and is not closed, and that the notification REQ starts
+  < 3 s after the reload. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB`
   (default ChadF), `JUMBLE_E2E_DEAD_RELAY`.
 - Logging in from a test: the app backs localStorage up to main
   (`renderer-state.enc` in userData, 50 ms after a change) and restores a newer

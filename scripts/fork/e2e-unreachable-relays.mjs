@@ -13,9 +13,10 @@
 // read, and logs out at the end.
 //
 // Two launches of the dev app (jumble-dev data folder). Launch 1 starts with
-// no unreachable-relays.json and a cleared IndexedDB and localStorage, and
-// waits until the app marks the dead relay. Launch 2 (also cleared) checks
-// that every REQ to it ends at once. The test deletes the file at the end.
+// no unreachable-relays.json and a cleared IndexedDB, and waits until the app
+// marks the dead relay. Launch 2 (IndexedDB cleared again) checks that every
+// REQ to it gets EOSE at once and is not closed (it stays registered, to
+// attach if the relay answers again). The test deletes the file at the end.
 //
 // Env:
 //   JUMBLE_E2E_DEAD_RELAY  the relay that gives no answer (default wss://nos.lol/)
@@ -39,7 +40,6 @@ const NPUB =
 const PK = nip19.decode(NPUB).data
 const USER_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'jumble-dev')
 const STORE = path.join(USER_DATA, 'unreachable-relays.json')
-const SKIP_REASON = 'relay connection skipped: no answer recently'
 const MARK_WAIT_MS = 45_000
 const WATCH_MS = 12_000
 
@@ -96,17 +96,15 @@ async function launch(label) {
         urls.add(url)
         const notification = filters.some((f) => f['#p']?.includes(pk))
         if (url === dead || notification) {
-          subs.set(subId, { url, notification, start: Date.now(), end: null, reason: null })
+          subs.set(subId, { url, notification, start: Date.now(), eose: null, close: null })
         }
         return subscribe(e, subId, url, filters)
       })
       const send = w.webContents.send.bind(w.webContents)
       w.webContents.send = (ch, p) => {
         const s = p && typeof p === 'object' ? subs.get(p.subId) : undefined
-        if (s && (ch === 'relay:sub:eose' || ch === 'relay:sub:close')) {
-          s.end ??= Date.now()
-          if (ch === 'relay:sub:close') s.reason ??= p.reason
-        }
+        if (s && ch === 'relay:sub:eose') s.eose ??= Date.now()
+        if (s && ch === 'relay:sub:close') s.close ??= p.reason
         return send(ch, p)
       }
       return electronApp.getPath('userData')
@@ -165,7 +163,7 @@ try {
   }
   const firstDead = (await first.subs()).filter((s) => s.url === DEAD)
   console.log(
-    `  launch 1: ${firstDead.length} REQs to ${DEAD}; slowest ended ${Math.max(0, ...firstDead.map((s) => (s.end ?? Date.now()) - s.start))} ms after its start`
+    `  launch 1: ${firstDead.length} REQs to ${DEAD}; slowest ended ${Math.max(0, ...firstDead.map((s) => (s.eose ?? Date.now()) - s.start))} ms after its start`
   )
   record('launch 1: the app marks the relay that gives no answer', markedAt !== null, {
     msAfterReload: markedAt === null ? null : markedAt - first.t0,
@@ -174,24 +172,24 @@ try {
   logs.push(...first.logs)
   await close(first, 'launch 1')
 
-  // Launch 2: every read to it ends at once.
+  // Launch 2: every read to it gets EOSE at once.
   const second = await launch('launch 2')
   await second.page.waitForTimeout(WATCH_MS)
   const all = await second.subs()
   const dead = all.filter((s) => s.url === DEAD)
-  const waits = dead.map((s) => (s.end === null ? null : s.end - s.start))
+  const waits = dead.map((s) => (s.eose === null ? null : s.eose - s.start))
   record('launch 2: the app still sends reads to that relay', dead.length > 0, {
     count: dead.length
   })
   record(
-    'launch 2: every read to it ends at once (< 200 ms)',
+    'launch 2: every read to it gets EOSE at once (< 200 ms)',
     dead.length > 0 && waits.every((w) => w !== null && w < 200),
     { maxMs: waits.includes(null) ? 'not ended' : Math.max(0, ...waits) }
   )
   record(
-    'launch 2: they end with the skip reason',
-    dead.length > 0 && dead.every((s) => s.reason === SKIP_REASON),
-    { reasons: [...new Set(dead.map((s) => s.reason))] }
+    'launch 2: none of them is closed (they stay registered)',
+    dead.length > 0 && dead.every((s) => s.close === null),
+    { closeReasons: [...new Set(dead.map((s) => s.close).filter(Boolean))] }
   )
   const notif = all.filter((s) => s.notification)
   const notifStart = notif.length ? Math.min(...notif.map((s) => s.start)) - second.t0 : null

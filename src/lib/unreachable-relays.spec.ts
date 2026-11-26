@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SmartPool } from './smart-pool'
 import {
+  FIRST_RECHECK_AFTER_MS,
   RECHECK_AFTER_MS,
-  UNREACHABLE_SKIP_REASON,
   UnreachableRelays,
   type UnreachableRelayStorage
 } from './unreachable-relays'
@@ -127,7 +127,7 @@ describe('UnreachableRelays with SmartPool', () => {
     vi.useRealTimers()
   })
 
-  it('skips a read at once after the relay gave no answer and the caller closed its REQ', async () => {
+  it('ends a read at once after the relay gave no answer and the caller closed its REQ', async () => {
     const { pool, unreachable } = createPool()
     await failOnce(pool)
     expect(unreachable.has(DEAD)).toBe(true)
@@ -139,8 +139,8 @@ describe('UnreachableRelays with SmartPool', () => {
     await flushPromises()
 
     expect(oneose).toHaveBeenCalledOnce()
-    expect(onclose).toHaveBeenCalledWith(UNREACHABLE_SKIP_REASON)
-    expect(oneose.mock.invocationCallOrder[0]).toBeLessThan(onclose.mock.invocationCallOrder[0])
+    // The REQ stays open, so it can attach when the relay answers again.
+    expect(onclose).not.toHaveBeenCalled()
     expect(socketsTo(DEAD)).toHaveLength(before)
   })
 
@@ -278,6 +278,84 @@ describe('UnreachableRelays with SmartPool', () => {
     expect(onclose).not.toHaveBeenCalled()
   })
 
+  it('attaches a skipped long-lived REQ when a re-check finds the relay again', async () => {
+    const { pool, unreachable } = createPool()
+    await failOnce(pool)
+    expect(unreachable.has(DEAD)).toBe(true)
+    await vi.advanceTimersByTimeAsync(FIRST_RECHECK_AFTER_MS)
+    FakeWebSocket.modes.set(DEAD, 'open')
+
+    const oneose = vi.fn()
+    const onclose = vi.fn()
+    pool.getRelay(DEAD).subscribe([{ kinds: [1], since: 5 }], { oneose, onclose })
+    await flushPromises()
+    expect(oneose).toHaveBeenCalledOnce()
+    const socket = socketsTo(DEAD).at(-1)!
+    const reqs = socket.sent.filter((message) => message.startsWith('["REQ"'))
+    expect(reqs).toHaveLength(1)
+    expect(JSON.parse(reqs[0])[2]).toEqual({ kinds: [1], since: 5 })
+    expect(onclose).not.toHaveBeenCalled()
+  })
+
+  it('keeps a skipped REQ open, with no retries, while the relay stays silent', async () => {
+    const { pool, unreachable } = createPool()
+    await failOnce(pool)
+    await vi.advanceTimersByTimeAsync(FIRST_RECHECK_AFTER_MS)
+
+    const onclose = vi.fn()
+    pool.getRelay(DEAD).subscribe([{ kinds: [1] }], { onclose })
+    await flushPromises()
+    const afterCheck = socketsTo(DEAD).length
+    // The re-check times out; no retry follows, and the REQ is not closed.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(unreachable.has(DEAD)).toBe(true)
+    expect(socketsTo(DEAD)).toHaveLength(afterCheck)
+    expect(onclose).not.toHaveBeenCalled()
+  })
+
+  it('keeps a long-lived REQ open, with no retries, once its relay is marked', async () => {
+    const { pool, unreachable } = createPool()
+    const good = pool.getRelay(GOOD).subscribe([{ kinds: [1] }], {})
+    const onclose = vi.fn()
+    const oneose = vi.fn()
+    pool.getRelay(DEAD).subscribe([{ kinds: [1] }], { oneose, onclose })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(unreachable.has(DEAD)).toBe(true)
+    expect(oneose).toHaveBeenCalledOnce()
+
+    const before = socketsTo(DEAD).length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(socketsTo(DEAD)).toHaveLength(before)
+    expect(onclose).not.toHaveBeenCalled()
+    good.close()
+  })
+
+  it('does not connect to a marked relay on a health check before its re-check is due', async () => {
+    const { pool } = createPool()
+    await failOnce(pool)
+    pool.getRelay(DEAD).subscribe([{ kinds: [1] }], {})
+    await flushPromises()
+    const before = socketsTo(DEAD).length
+
+    await pool.checkRelays()
+    await flushPromises()
+    expect(socketsTo(DEAD)).toHaveLength(before)
+  })
+
+  it('re-checks a marked relay with an open REQ on a health check when due', async () => {
+    const { pool } = createPool()
+    await failOnce(pool)
+    pool.getRelay(DEAD).subscribe([{ kinds: [1] }], {})
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(FIRST_RECHECK_AFTER_MS)
+    const before = socketsTo(DEAD).length
+
+    void pool.checkRelays()
+    await flushPromises()
+    expect(socketsTo(DEAD)).toHaveLength(before + 1)
+  })
+
   it('leaves a pool without the option unchanged', async () => {
     const pool = new SmartPool({
       websocketImplementation: FakeWebSocket as unknown as typeof WebSocket
@@ -377,10 +455,62 @@ describe('UnreachableRelays records', () => {
 
   it('asks for one re-check when the last check is 5 minutes old', () => {
     const { relays: r } = relays({
-      [DEAD]: { markedAt: NOW - RECHECK_AFTER_MS, checkedAt: NOW - RECHECK_AFTER_MS }
+      [DEAD]: { markedAt: NOW - DAY, checkedAt: NOW - RECHECK_AFTER_MS + 1 }
     })
-    expect(r.readDecision(DEAD)).toEqual({ reason: UNREACHABLE_SKIP_REASON, recheck: true })
-    expect(r.readDecision(DEAD)).toEqual({ reason: UNREACHABLE_SKIP_REASON, recheck: false })
+    expect(r.readDecision(DEAD)).toEqual({ recheck: false })
+    const later = relays({
+      [DEAD]: { markedAt: NOW - DAY, checkedAt: NOW - RECHECK_AFTER_MS }
+    }).relays
+    expect(later.readDecision(DEAD)).toEqual({ recheck: true })
+    expect(later.readDecision(DEAD)).toEqual({ recheck: false })
+  })
+
+  it('re-checks a new mark after 30 s the first time', () => {
+    const marked = (age: number) =>
+      relays({ [DEAD]: { markedAt: NOW - age, checkedAt: NOW - age } }).relays.readDecision(DEAD)
+    expect(marked(FIRST_RECHECK_AFTER_MS - 1)).toEqual({ recheck: false })
+    expect(marked(FIRST_RECHECK_AFTER_MS)).toEqual({ recheck: true })
+  })
+
+  it('re-checks a mark whose last check is in the future (clock set back, bad file)', () => {
+    const { relays: r } = relays({ [DEAD]: { markedAt: NOW - DAY, checkedAt: NOW + DAY } })
+    expect(r.readDecision(DEAD)).toEqual({ recheck: true })
+  })
+
+  it('does not mark an attempt that spans a network change', () => {
+    const { relays: r } = relays()
+    r.attemptEnded(GOOD, ok)
+    r.networkChanged(false)
+    r.networkChanged(true)
+    r.attemptEnded(DEAD, slow)
+    expect(r.has(DEAD)).toBe(false)
+  })
+
+  it('does not mark an attempt that starts less than 10 s after a network change', () => {
+    let now = NOW
+    const r = new UnreachableRelays(memoryStorage(), () => now)
+    r.networkChanged(true)
+    now += 19_000
+    r.attemptEnded(GOOD, { ...ok, startedAt: now - 100, endedAt: now - 50 })
+    r.attemptEnded(DEAD, { ...slow, startedAt: now - 10_000, endedAt: now })
+    expect(r.has(DEAD)).toBe(false)
+
+    now += 2_000
+    r.attemptEnded(DEAD, { ...slow, startedAt: now - 10_000, endedAt: now })
+    expect(r.has(DEAD)).toBe(true)
+  })
+
+  it('keeps a mark due for a re-check when its check failed during a network change', () => {
+    let now = NOW
+    const r = new UnreachableRelays(
+      memoryStorage({ [DEAD]: { markedAt: NOW - DAY, checkedAt: NOW - DAY } }),
+      () => now
+    )
+    expect(r.readDecision(DEAD)).toEqual({ recheck: true })
+    r.networkChanged(false)
+    r.attemptEnded(DEAD, { ...slow, startedAt: now - 1_000, endedAt: now })
+    now += 1_000
+    expect(r.readDecision(DEAD)).toEqual({ recheck: true })
   })
 
   it('starts one re-check, not two, when the online event and the 5 minutes both apply', () => {

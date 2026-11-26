@@ -8,14 +8,15 @@
 export const UNREACHABLE_AFTER_MS = 8_000
 /** Longer than 1.5 × the 10 s connect timeout: a timer delayed by system sleep. */
 const SLEEP_GUARD_MS = 15_000
-/** A read to a marked relay starts one background connect at most this often. */
+/** A read to a marked relay starts one background connect at most this often.
+ * The first re-check of a new mark comes sooner, in case the mark was wrong. */
+export const FIRST_RECHECK_AFTER_MS = 30 * 1000
 export const RECHECK_AFTER_MS = 5 * 60 * 1000
+/** An attempt that started before a network change, or this soon after it,
+ * proves nothing about the relay. */
+const NETWORK_SETTLE_MS = 10_000
 const RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_RECORDS = 500
-
-/** Starts with "relay connection", so the renderer counts it as a transport
- * failure and records no read rejection. */
-export const UNREACHABLE_SKIP_REASON = 'relay connection skipped: no answer recently'
 
 export type ConnectAttemptOutcome = {
   /** The WebSocket opened. */
@@ -25,14 +26,15 @@ export type ConnectAttemptOutcome = {
   networkOnline: boolean
 }
 
-export type ReadDecision = { reason: string; recheck: boolean }
+export type ReadDecision = { recheck: boolean }
 
 /** What ManagedRelay asks and tells. */
 export type RelayReachability = {
-  /** Undefined: read as usual. Otherwise end the read at once; `recheck` asks
-   * for one background connect. */
+  /** Undefined: read as usual. Otherwise end the read at once, with no
+   * connection; `recheck` asks for one background connect. */
   readDecision(url: string): ReadDecision | undefined
   attemptEnded(url: string, outcome: ConnectAttemptOutcome): void
+  has(url: string): boolean
 }
 
 type UnreachableRecord = { markedAt: number; checkedAt: number }
@@ -45,8 +47,9 @@ export type UnreachableRelayStorage = {
 export class UnreachableRelays implements RelayReachability {
   private records?: Map<string, UnreachableRecord>
   private lastHandshakeAt = Number.NEGATIVE_INFINITY
-  /** Marks whose next read starts a re-check (set by the online event). */
+  /** Marks whose next read starts a re-check (online event, network change). */
   private recheckNow = new Set<string>()
+  private lastNetworkChangeAt = Number.NEGATIVE_INFINITY
 
   constructor(
     private readonly storage?: UnreachableRelayStorage,
@@ -61,14 +64,15 @@ export class UnreachableRelays implements RelayReachability {
     const record = this.getRecords().get(url)
     if (!record) return undefined
     const now = this.now()
-    const onlineCheck = this.recheckNow.delete(url)
-    if (!onlineCheck && now - record.checkedAt < RECHECK_AFTER_MS) {
-      return { reason: UNREACHABLE_SKIP_REASON, recheck: false }
-    }
+    const dueNow = this.recheckNow.delete(url)
+    const wait = record.checkedAt === record.markedAt ? FIRST_RECHECK_AFTER_MS : RECHECK_AFTER_MS
+    const age = now - record.checkedAt
+    // A check in the future (clock set back, bad file) counts as due.
+    if (!dueNow && age >= 0 && age < wait) return { recheck: false }
     // Count the check as done now, so parallel reads start only one.
     record.checkedAt = now
     this.save()
-    return { reason: UNREACHABLE_SKIP_REASON, recheck: true }
+    return { recheck: true }
   }
 
   attemptEnded(url: string, outcome: ConnectAttemptOutcome) {
@@ -79,15 +83,22 @@ export class UnreachableRelays implements RelayReachability {
       return
     }
 
+    const duringNetworkChange =
+      this.lastNetworkChangeAt >= outcome.startedAt - NETWORK_SETTLE_MS
     const record = records.get(url)
     if (record) {
-      // A failed re-check (or any failed attempt) keeps the mark.
+      // A failed check keeps the mark. One that met a network change proves
+      // nothing: the next read checks again.
+      if (duringNetworkChange) {
+        this.recheckNow.add(url)
+        return
+      }
       record.checkedAt = Math.max(record.checkedAt, outcome.endedAt)
       this.save()
       return
     }
 
-    if (!outcome.networkOnline) return
+    if (!outcome.networkOnline || duringNetworkChange) return
     const duration = outcome.endedAt - outcome.startedAt
     if (duration < UNREACHABLE_AFTER_MS || duration > SLEEP_GUARD_MS) return
     // Mark only when another relay answered during this attempt: the network
@@ -99,8 +110,10 @@ export class UnreachableRelays implements RelayReachability {
     this.save()
   }
 
-  /** After offline → online, every mark gets its re-check on the next read. */
+  /** Offline or online. After online, every mark gets its re-check on the
+   * next read. */
   networkChanged(online: boolean) {
+    this.lastNetworkChangeAt = this.now()
     if (online) this.recheckNow = new Set(this.getRecords().keys())
   }
 

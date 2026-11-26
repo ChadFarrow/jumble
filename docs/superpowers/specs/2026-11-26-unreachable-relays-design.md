@@ -86,3 +86,21 @@ empty. Records not checked for 30 days are dropped; at most 500 records are kept
   makes a request wait; a mark has no expiry that brings the wait back.
 - Reads only; publish and auth still try a marked relay.
 - Fast failures (Damus 503) are not marked.
+
+## Changes after the final review (2026-11-26)
+
+- A skipped read gets EOSE at once but stays registered (no close): a later
+  handshake (re-check, publish) attaches it, so a long-lived REQ to a relay that
+  works again is not lost. Failed attempts to a marked relay are not retried;
+  their REQs get EOSE and stay registered. `checkHealth` connects to a marked
+  relay only for a due re-check. The skip reason string is gone.
+- No mark when a network change (offline or online) came during the attempt or
+  in the 10 s before it; a failed re-check that met a network change leaves the
+  mark due for the next read.
+- The first re-check of a new mark comes after 30 s, then every 5 min.
+- A `checkedAt` in the future counts as due.
+- Not done: an Electron `powerMonitor` `resume` hook (no RelayManager test
+  harness; the 15 s sleep guard and the network-change rule cover wake);
+  requiring two other handshakes (a LAN relay such as Haven could keep the
+  guard true during an uplink outage; the 30 s first re-check and the
+  registered REQs bound the effect).
