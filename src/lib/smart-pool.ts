@@ -5,12 +5,15 @@ import { ManagedRelay } from './managed-relay'
 import type { RelayObserver } from './relay-observation'
 import { initializeNostrVerifier, verifyEvent } from './nostr-verifier'
 import { observeRelayPoolLifecycle } from './relay-pool-lifecycle'
+import type { UnreachableRelays } from './unreachable-relays'
 import { isInsecureUrl, isLocalNetworkUrl, normalizeUrl } from './url'
 
 export type SmartPoolOptions = {
   observe?: RelayObserver
   allowInsecure?: boolean
   websocketImplementation?: AbstractRelayConstructorOptions['websocketImplementation']
+  /** Fork: skip reads to relays that recently gave no answer (Electron main only). */
+  unreachableRelays?: UnreachableRelays
 }
 
 /** Registry and lifecycle coordinator for per-URL ManagedRelay instances. */
@@ -25,11 +28,13 @@ export class SmartPool implements IRelayPool {
   private allowInsecure: boolean
   private trustedInsecureRelays = new Set<string>()
   private websocketImplementation?: AbstractRelayConstructorOptions['websocketImplementation']
+  private unreachableRelays?: UnreachableRelays
 
   constructor(options: SmartPoolOptions = {}) {
     this.observe = options.observe
     this.allowInsecure = options.allowInsecure ?? false
     this.websocketImplementation = options.websocketImplementation
+    this.unreachableRelays = options.unreachableRelays
     void initializeNostrVerifier()
     observeRelayPoolLifecycle(this)
   }
@@ -53,7 +58,8 @@ export class SmartPool implements IRelayPool {
           // forever per URL. Seen-on entries remain independently bounded.
           if (this.relays.get(url) === managedRelay) this.relays.delete(url)
         },
-        this.observe
+        this.observe,
+        this.unreachableRelays
       )
       managedRelay.setNetworkOnline(this.networkOnline)
       this.relays.set(url, managedRelay)
@@ -74,6 +80,7 @@ export class SmartPool implements IRelayPool {
   setNetworkOnline(online: boolean) {
     if (this.networkOnline === online) return
     this.networkOnline = online
+    this.unreachableRelays?.networkChanged(online)
     for (const relay of this.relays.values()) relay.setNetworkOnline(online)
   }
 

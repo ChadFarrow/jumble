@@ -71,7 +71,10 @@ try {
       const w = BrowserWindow.getAllWindows()[0]
       w.setOpacity(0)
       w.setIgnoreMouseEvents(true)
-      await session.defaultSession.clearStorageData({ storages: ['indexdb', 'localstorage'] })
+      // IndexedDB only: the app backs localStorage up to main and would
+      // restore that backup over a clear made from here. The login below
+      // overwrites the account keys.
+      await session.defaultSession.clearStorageData({ storages: ['indexdb'] })
 
       // Tag the notification subscriptions (the '#p' filter with zap receipts).
       const subs = (globalThis.__notifSubs = new Map())
@@ -136,6 +139,9 @@ try {
     },
     { pk: PK, npub: NPUB }
   )
+  // The app backs localStorage up to main 50 ms after a change and restores
+  // a newer backup on reload: let it save the login first.
+  await page.waitForTimeout(500)
   const t0 = Date.now()
   await page.reload()
   await page.waitForSelector('[title="Notifications"]', { timeout: 30000 })
@@ -278,6 +284,7 @@ try {
       localStorage.removeItem('currentAccount')
     })
     .catch(() => {})
+  await page?.waitForTimeout(500).catch(() => {})
   await app.close().catch(() => {})
   record('no page errors', logs.length === 0, logs.length ? logs : undefined)
   const failed = results.filter((r) => !r.ok).length
