@@ -39,6 +39,15 @@ const SCENARIOS = [
   { name: 'qr', flow: 'qr', amber: false },
   { name: 'qr-amber', flow: 'qr', amber: true },
   { name: 'qr-amber-switch', flow: 'qr', amber: true, switchRelays: [BUNKER_RELAY] },
+  // Clave answers follow-up requests from a loop with a 2 s sleep: slow answers.
+  { name: 'qr-amber-slow', flow: 'qr', amber: true, realDelayMs: 3000 },
+  {
+    name: 'qr-amber-slow-switch',
+    flow: 'qr',
+    amber: true,
+    realDelayMs: 3000,
+    switchRelays: [BUNKER_RELAY]
+  },
   { name: 'bunker-amber', flow: 'bunker', amber: true }
 ].filter(
   (s) =>
@@ -59,7 +68,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** A remote signer with a throwaway key. With `amber`, a second signer of the
  * same key refuses every request first. */
-async function startSigner({ relays, amber, switchRelays, bunkerSecret }) {
+async function startSigner({ relays, amber, switchRelays, bunkerSecret, realDelayMs }) {
   const sk = generateSecretKey()
   const pk = getPublicKey(sk)
   const pool = new SimplePool()
@@ -107,7 +116,7 @@ async function startSigner({ relays, amber, switchRelays, bunkerSecret }) {
           ? { id: req.id, result: '', error: 'wrong secret' }
           : { id: req.id, result: 'ack' }
     else payload = { id: req.id, result: '', error: 'refused by the test signer' }
-    if (amber) await sleep(300)
+    await sleep(realDelayMs ?? (amber ? 300 : 0))
     await send(ev.pubkey, payload, onRelays)
     if (req.method === 'switch_relays' && switchRelays) answerRelays = switchRelays
   }
@@ -207,7 +216,12 @@ try {
         const uri = new URL(connectionString)
         const clientPk = uri.hostname || uri.pathname.replace(/^\/+/, '')
         const relays = uri.searchParams.getAll('relay')
-        signer = await startSigner({ relays, amber: s.amber, switchRelays: s.switchRelays })
+        signer = await startSigner({
+          relays,
+          amber: s.amber,
+          switchRelays: s.switchRelays,
+          realDelayMs: s.realDelayMs
+        })
         await sleep(SCAN_DELAY_MS)
         await signer.send(
           clientPk,
@@ -231,7 +245,9 @@ try {
         if (!typed) throw new Error('no bunker:// input')
         await page.waitForTimeout(200)
         const clicked = await page.evaluate(() => {
-          const b = [...document.querySelectorAll('button')].find(
+          // The dialog's Login button, not the sidebar's.
+          const dialog = document.querySelector('#bunker-input')?.closest('[role="dialog"]')
+          const b = [...(dialog ?? document).querySelectorAll('button')].find(
             (x) => x.textContent.trim() === 'Login' && !x.disabled
           )
           b?.click()

@@ -143,7 +143,9 @@ so upstream merges stay clean.
   `sign_event`, so the app publishes nothing; it sends only kind 24133 events)
   and logs in by the QR (it reads the `nostrconnect://` URI from the page) and by
   a `bunker://` link on `wss://relay.powr.build/`. The `-amber` scenarios add a
-  second signer of the same key that answers "no permission" 300 ms first.
+  second signer of the same key that answers "no permission" first; the real
+  answer comes 300 ms later, or 3 s later in the `-slow` ones (Clave answers
+  from a loop with a 2 s sleep).
   Env: `JUMBLE_E2E_SCENARIOS`, `JUMBLE_E2E_SCAN_DELAY_MS`. Never send a request
   to Chad's own key from a test: his Clave and Amber both answer (and Clave shows
   it to him).
