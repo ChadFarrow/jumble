@@ -258,20 +258,36 @@ describe('buildContextMenuTemplate', () => {
   })
 })
 
-// Runs a page script against a fake DOM with one container that holds images.
-function runFindImage(
-  imgs: Array<{ src: string; rect: [number, number, number, number]; opacity?: string }>,
-  x: number,
-  y: number
-) {
+type TFakeImage = {
+  src: string
+  rect: [number, number, number, number]
+  opacity?: string
+  // Another element (a dialog, a backdrop) lies on top of this image.
+  covered?: boolean
+}
+
+// Runs the page script against a fake DOM with one container that holds the
+// images. Like Chromium, elementFromPoint() skips an image until the script
+// makes it hit-testable, and then returns the image, or the element on top of it.
+function runFindImage(imgs: TFakeImage[], x: number, y: number) {
   class HTMLImageElement {}
+  const cover = { cover: true }
   const images = imgs.map((i) => {
-    const img = Object.assign(new HTMLImageElement(), {
+    const props = new Map<string, string>()
+    return Object.assign(new HTMLImageElement(), {
       currentSrc: i.src,
       src: i.src,
       complete: true,
       naturalWidth: 100,
       opacity: i.opacity ?? '1',
+      covered: !!i.covered,
+      props,
+      style: {
+        getPropertyValue: (k: string) => props.get(k) ?? '',
+        getPropertyPriority: () => '',
+        setProperty: (k: string, v: string) => props.set(k, v),
+        removeProperty: (k: string) => props.delete(k)
+      },
       getBoundingClientRect: () => ({
         left: i.rect[0],
         top: i.rect[1],
@@ -279,19 +295,30 @@ function runFindImage(
         bottom: i.rect[3]
       })
     })
-    return img
   })
-  // The hit stack: a wrapper div (the img itself has pointer-events: none), then body.
+  const inside = (img: (typeof images)[number]) => {
+    const r = img.getBoundingClientRect()
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+  }
+  // The hit stack: a wrapper div (the img itself has pointer-events: none).
   const wrapper = { querySelectorAll: () => images }
   const context = {
     HTMLImageElement,
-    document: { elementsFromPoint: () => [wrapper] },
+    document: {
+      elementsFromPoint: () => [wrapper],
+      elementFromPoint: () => {
+        const hit = images.find((i) => i.props.get('pointer-events') === 'auto' && inside(i))
+        if (!hit) return wrapper
+        return hit.covered ? cover : hit
+      }
+    },
     getComputedStyle: (img: { opacity: string }) => ({
       visibility: 'visible',
       opacity: img.opacity
     })
   }
-  return vm.runInNewContext(findImageScript(x, y), context)
+  const result = vm.runInNewContext(findImageScript(x, y), context)
+  return { result, styleLeftOver: images.some((i) => i.props.size > 0) }
 }
 
 describe('findImageScript', () => {
@@ -304,8 +331,21 @@ describe('findImageScript', () => {
         ],
         80,
         25
-      )
+      ).result
     ).toBe('https://a/2.webp')
+  })
+
+  it('ignores an image under a dialog or backdrop', () => {
+    expect(
+      runFindImage([{ src: 'https://a/feed.jpg', rect: [0, 0, 100, 100], covered: true }], 50, 50)
+        .result
+    ).toBeNull()
+  })
+
+  it('puts the image style back after the check', () => {
+    expect(
+      runFindImage([{ src: 'https://a/1.jpg', rect: [0, 0, 50, 50] }], 25, 25).styleLeftOver
+    ).toBe(false)
   })
 
   it('skips hidden images and data: spacers', () => {
@@ -317,12 +357,14 @@ describe('findImageScript', () => {
         ],
         25,
         25
-      )
+      ).result
     ).toBeNull()
   })
 
   it('returns null when no image is under the point', () => {
-    expect(runFindImage([{ src: 'https://a/1.jpg', rect: [0, 0, 50, 50] }], 200, 200)).toBeNull()
+    expect(
+      runFindImage([{ src: 'https://a/1.jpg', rect: [0, 0, 50, 50] }], 200, 200).result
+    ).toBeNull()
   })
 
   it('accepts only numbers as coordinates', () => {

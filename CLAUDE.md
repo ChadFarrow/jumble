@@ -33,9 +33,12 @@ so upstream merges stay clean.
 
 - Right-click menu (`electron/main/context-menu.ts`): Copy for selected text;
   Cut/Copy/Paste/Select All and spelling suggestions in text fields; Copy Link
-  (in-app links become `https://jumble.social/...`); Copy Image, Copy Image
-  Address and Save Image As. Components that call `preventDefault()` on
-  `contextmenu` (DM list, DM messages, like button) keep their own menu.
+  for web links; Copy Image, Copy Image Address and Save Image As. An image
+  under a dialog or backdrop gets no image items. Components that call
+  `preventDefault()` on `contextmenu` (DM list, DM messages, like button) keep
+  their own menu. In-app links are mostly `SecondaryPageLink` `<span>`s with no
+  `href`, so they get no Copy Link; an `<a>` to the app's own origin would be
+  copied as `https://jumble.social/...`.
 
 ### Tests
 
@@ -46,6 +49,8 @@ so upstream merges stay clean.
   replaces `shell.openExternal` so no browser opens, and puts the clipboard back.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
   before a real-app run.
-- On macOS a role item (`copy`, `paste` ...) runs natively; `MenuItem.click()`
-  from a script does nothing for it. Tests check that the role is present and
-  enabled.
+- On macOS a role item (`copy`, `paste` ...) sends its action to the key window,
+  like Edit > Copy; `MenuItem.click()` from a script does nothing for it. The
+  test window is not key (making it key would take the user's keyboard focus),
+  so tests check that the role is present and enabled, and check the copy with
+  `webContents.copy()`. One check opens the real native menu for 300 ms.

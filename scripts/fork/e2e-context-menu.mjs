@@ -65,6 +65,7 @@ try {
       shell.openExternal = async (u) => {
         globalThis.__opened.push(u)
       }
+      globalThis.__nativePopup = Menu.prototype.popup
       Menu.prototype.popup = function () {
         globalThis.__lastMenu = this
         globalThis.__menus.push(
@@ -377,6 +378,114 @@ try {
     record('empty space: right-click shows no menu', (await rightClick(r)) === null)
   }
 
+  // 6b. An image under a dialog backdrop: no image items.
+  {
+    const r = await page.evaluate(() => {
+      const el = document.querySelector('[data-ctx-img]')
+      el.scrollIntoView({ block: 'center' })
+      const b = el.getBoundingClientRect()
+      const backdrop = document.createElement('div')
+      backdrop.id = 'ctx-backdrop'
+      backdrop.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.5)'
+      document.body.appendChild(backdrop)
+      return { x: b.left + b.width / 2, y: b.top + b.height / 2 }
+    })
+    await page.waitForTimeout(300)
+    const m = await rightClick(r)
+    record('image under a backdrop: no image items', !labels(m)?.includes('Copy Image'), labels(m))
+    await page.evaluate(() => document.getElementById('ctx-backdrop')?.remove())
+  }
+
+  // 6c. Zoomed page (View > Zoom In): the image under the pointer is still found.
+  {
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.5)
+    )
+    await page.waitForTimeout(800)
+    const r = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('[data-ctx-img]')].find((e) => e.offsetParent)
+      el.scrollIntoView({ block: 'center' })
+      const b = el.getBoundingClientRect()
+      return { x: b.left + b.width / 2, y: b.top + b.height / 2, src: el.currentSrc || el.src }
+    })
+    await page.waitForTimeout(400)
+    const m = await rightClick(r)
+    record(
+      'zoom 150%: right-click on an image shows Copy Image',
+      labels(m)?.includes('Copy Image'),
+      labels(m)
+    )
+    if (labels(m)?.includes('Copy Image Address')) {
+      await clickItem('Copy Image Address')
+      await page.waitForTimeout(300)
+      record('zoom 150%: it is the image under the pointer', (await clipText()) === r.src)
+    }
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1)
+    )
+    await page.waitForTimeout(500)
+  }
+
+  // 6d. The real native menu opens (shown for a moment, then closed), and the
+  // native Copy action copies the selected text.
+  {
+    const sel = await page.evaluate(() => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      let node
+      while ((node = walker.nextNode())) {
+        const el = node.parentElement
+        if (!el || el.closest('a, button, nav') || node.textContent.trim().length < 25) continue
+        el.scrollIntoView({ block: 'center' })
+        const range = document.createRange()
+        const start = node.textContent.search(/\S/)
+        range.setStart(node, start)
+        range.setEnd(node, start + 12)
+        const r = range.getBoundingClientRect()
+        if (r.width < 5 || r.height < 5) continue
+        const s = window.getSelection()
+        s.removeAllRanges()
+        s.addRange(range)
+        if (s.toString().trim().length < 5) continue
+        return { text: s.toString(), x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      }
+      return null
+    })
+    await app.evaluate(({ Menu }) => {
+      globalThis.__nativeShown = false
+      const recordOnly = Menu.prototype.popup
+      Menu.prototype.popup = function (options) {
+        this.once('menu-will-show', () => {
+          globalThis.__nativeShown = true
+          setTimeout(() => this.closePopup(), 300)
+        })
+        Menu.prototype.popup = recordOnly
+        return globalThis.__nativePopup.call(this, options)
+      }
+    })
+    await page.mouse.click(sel.x, sel.y, { button: 'right' })
+    let shown = false
+    for (let i = 0; i < 30 && !shown; i++) {
+      await page.waitForTimeout(100)
+      shown = await app.evaluate(() => globalThis.__nativeShown)
+    }
+    record('the native menu opens on a right-click', shown)
+    await page.waitForTimeout(600)
+    await clearClip()
+    // On macOS the Copy item sends copy: to the key window, the same as
+    // Edit > Copy (Cmd+C). The test window is not key (making it key would take
+    // the keyboard focus from the user), so this checks the copy command of the
+    // page with webContents.copy(), which the item runs on Linux and Windows.
+    const copied = await app.evaluate(async ({ BrowserWindow, clipboard }) => {
+      BrowserWindow.getAllWindows()[0].webContents.copy()
+      await new Promise((r) => setTimeout(r, 500))
+      return clipboard.readText()
+    })
+    record('Copy copies the selected text (webContents.copy)', copied === sel.text, {
+      want: sel.text,
+      got: copied
+    })
+  }
+
   // 7. A text field -> edit items, enabled from the field state.
   await go('/search', 200)
   await page.waitForTimeout(2000)
@@ -436,9 +545,20 @@ try {
     await app
       .evaluate(async ({ clipboard }) => {
         clipboard.clear()
-        if (globalThis.__savedClipboard?.length) await clipboard.write(globalThis.__savedClipboard)
+        const saved = globalThis.__savedClipboard ?? []
+        if (saved.length) await clipboard.write(saved)
+        const want = saved.flatMap((i) => i.types).sort()
+        const got = (await clipboard.read()).flatMap((i) => i.types).sort()
+        return { want, got }
       })
-      .catch((e) => console.log('clipboard restore failed', e.message))
+      .then(({ want, got }) =>
+        record(
+          'clipboard put back as it was (types)',
+          want.every((t) => got.includes(t)),
+          { want, got }
+        )
+      )
+      .catch((e) => record('clipboard put back', false, e.message))
   }
   await app.close().catch(() => {})
   const errors = logs.filter((l) => /pageerror|Failed to copy/.test(l))

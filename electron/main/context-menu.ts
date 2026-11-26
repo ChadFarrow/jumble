@@ -133,23 +133,41 @@ export function buildContextMenuTemplate(
 }
 
 /**
- * Page script that returns the src of the visible <img> under the point (CSS
+ * Page script that returns the src of the <img> on top at the point (CSS
  * pixels), or null. Jumble draws its images with `pointer-events: none`
  * (src/components/Image), so Chromium's hit test skips them: the context menu
  * params report mediaType 'none' and webContents.copyImageAt() copies nothing.
+ * An image under a dialog, a backdrop or another element does not count: the
+ * script makes each candidate hit-testable for one elementFromPoint() call and
+ * accepts it only when it is the element on top.
  */
 export function findImageScript(x: number, y: number): string {
   return `(() => {
   const x = ${Number(x)}, y = ${Number(y)};
+  const isOnTop = (img) => {
+    const value = img.style.getPropertyValue('pointer-events');
+    const priority = img.style.getPropertyPriority('pointer-events');
+    img.style.setProperty('pointer-events', 'auto', 'important');
+    try {
+      return document.elementFromPoint(x, y) === img;
+    } finally {
+      if (value) img.style.setProperty('pointer-events', value, priority);
+      else img.style.removeProperty('pointer-events');
+    }
+  };
+  const seen = new Set();
   for (const el of document.elementsFromPoint(x, y)) {
     const imgs = el instanceof HTMLImageElement ? [el] : el.querySelectorAll('img');
     for (const img of imgs) {
+      if (seen.has(img)) continue;
+      seen.add(img);
       const src = img.currentSrc || img.src;
       if (!src || src.startsWith('data:') || !img.complete || img.naturalWidth === 0) continue;
       const style = getComputedStyle(img);
       if (style.visibility === 'hidden' || style.opacity === '0') continue;
       const r = img.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return src;
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      if (isOnTop(img)) return src;
     }
   }
   return null;
