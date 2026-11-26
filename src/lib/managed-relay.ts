@@ -1,6 +1,7 @@
 import { AbstractRelay, SendingOnClosedConnection } from 'nostr-tools/abstract-relay'
 import { IRelay, TSubCloser, TSubHandlers } from '../types/relay-pool'
 import type { RelayObserver } from './relay-observation'
+import type { ReadDecision, RelayReachability } from './unreachable-relays'
 
 const DEFAULT_CONNECTION_TIMEOUT = 10 * 1000
 const RETRY_DELAYS_MS = [1_000, 2_000]
@@ -37,7 +38,9 @@ export class ManagedRelay implements IRelay {
     private readonly createConnection: () => AbstractRelay,
     private readonly assertConnectionAllowed: () => void,
     private readonly onIdle?: () => void,
-    private readonly observe?: RelayObserver
+    private readonly observe?: RelayObserver,
+    // Fork: skips reads to a relay that recently gave no answer.
+    private readonly reachability?: RelayReachability
   ) {}
 
   publish(
@@ -61,6 +64,9 @@ export class ManagedRelay implements IRelay {
   }
 
   subscribe(filters: Parameters<IRelay['subscribe']>[0], handlers: TSubHandlers): TSubCloser {
+    const skip = this.reachability?.readDecision(this.url)
+    if (skip) return this.skipSubscription(handlers, skip)
+
     this.clearReleaseTimer()
     const logical: LogicalSubscription = {
       filters: cloneFilters(filters),
@@ -150,6 +156,7 @@ export class ManagedRelay implements IRelay {
     const attempt = (async () => {
       let relay: AbstractRelay | undefined
       let established = false
+      let handshake = false
       let startedAt: number | undefined
       try {
         this.assertConnectionAllowed()
@@ -159,6 +166,13 @@ export class ManagedRelay implements IRelay {
         nextRelay.onclose = () => this.handleConnectionClose(nextRelay, generation, established)
         startedAt = Date.now()
         await nextRelay.connect({ timeout: DEFAULT_CONNECTION_TIMEOUT, abort: abort.signal })
+        handshake = true
+        this.reachability?.attemptEnded(this.url, {
+          ok: true,
+          startedAt,
+          endedAt: Date.now(),
+          networkOnline: this.networkOnline
+        })
 
         if (this.generation !== generation || this.connection !== nextRelay) {
           nextRelay.onclose = null
@@ -177,6 +191,16 @@ export class ManagedRelay implements IRelay {
         this.attachSubscriptions(nextRelay)
         return nextRelay
       } catch (error) {
+        // Also for an aborted attempt: a caller that gave up after 10 s is how
+        // a one-shot read meets a relay that never answers.
+        if (startedAt !== undefined && !handshake) {
+          this.reachability?.attemptEnded(this.url, {
+            ok: false,
+            startedAt,
+            endedAt: Date.now(),
+            networkOnline: this.networkOnline
+          })
+        }
         if (this.generation === generation) {
           if (relay) relay.onclose = null
           if (this.connection === relay) this.connection = undefined
@@ -305,6 +329,29 @@ export class ManagedRelay implements IRelay {
     this.clearReadTimer(logical)
     logical.physicalSub = undefined
     if (this.subscriptions.size === 0) this.clearRetryTimer()
+  }
+
+  /** Fork: end a read at once, with no connection. Settles after subscribe()
+   * returns, because callers store the closer first (RelayManager.subscribe). */
+  private skipSubscription(handlers: TSubHandlers, decision: ReadDecision): TSubCloser {
+    let open = true
+    queueMicrotask(() => {
+      if (!open) return
+      open = false
+      // Same order as failSubscriptions: EOSE first, so the aggregate settles.
+      handlers.oneose?.()
+      handlers.onclose?.(decision.reason)
+    })
+    if (decision.recheck) {
+      void this.withRelay(async () => undefined).catch(() => {
+        // attemptEnded() keeps the mark when the check fails.
+      })
+    }
+    return {
+      close: () => {
+        open = false
+      }
+    }
   }
 
   private connectForSubscriptions() {
