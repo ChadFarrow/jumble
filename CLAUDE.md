@@ -16,11 +16,18 @@ so upstream merges stay clean.
   Without `-R`, gh can pick the parent repo.
 - **Never push a tag.** `.github/workflows/release.yml` builds and publishes a
   release on a tag push. No release, zapstore entry or store build.
-- **Dev runs are separate from the installed app.** An unpackaged run
-  (`app.isPackaged === false`) uses `~/Library/Application Support/jumble-dev`.
-  A packaged build keeps the bundle id `com.codytseng.jumble`, so it would use
-  the installed app's data folder and the upstream auto-updater would replace it.
-  Ask Chad before a packaged build runs on his Mac.
+- **Chad's app is "Jumble Chad"** (`/Applications/Jumble Chad.app`), a separate
+  app next to upstream's Jumble (Chad's choice, 2026-11-26). Build and install it
+  with `./scripts/fork/build-mac.sh --install` (Chad must quit it first). Its
+  config, `scripts/fork/electron-builder.chad.cjs`, sets appId
+  `com.chadfarrow.jumble` and the name "Jumble Chad", so it has its own data
+  folder (`~/Library/Application Support/Jumble Chad`) and Keychain item
+  ("Jumble Chad Safe Storage"). It has no publish target, so the build has no
+  `app-update.yml`, and `electron/main/update-config.ts` keeps the updater off:
+  upstream releases never replace it. It is ad-hoc signed and not notarized.
+  Chad signs in to it himself (nsec with Jumble's password). Never touch
+  upstream's `~/Library/Application Support/jumble` or its Keychain item.
+- **Dev runs use `~/Library/Application Support/jumble-dev`** (`app.isPackaged === false`).
 - **Start every Electron or Chrome run with `--mute-audio`.**
 - **Electron 45 clipboard is async:** `clipboard.readText()`/`writeText()`/`write()`
   return Promises, and there is no `readImage()`/`writeImage()`.
@@ -44,7 +51,11 @@ so upstream merges stay clean.
 
 - Unit: `npm test`. CI also runs `npm run lint` and `npm run build`.
 - Real app: `ELECTRON=true npx vite build --config vite.electron.config.ts`, then
-  `node scripts/fork/e2e-context-menu.mjs`. It drives the dev app with
+  `node scripts/fork/e2e-context-menu.mjs`. For the built app, set
+  `JUMBLE_E2E_APP="$PWD/release/chad-<version>/mac-arm64/Jumble Chad.app/Contents/MacOS/Jumble Chad"`;
+  it then runs with a temporary `--user-data-dir` and checks that auto-update is
+  off. A packaged run creates the "Jumble Chad Safe Storage" Keychain item: delete
+  it after a test if Chad has not opened the app yet. It drives the dev app with
   Playwright's `_electron`, keeps the window invisible and click-through,
   replaces `shell.openExternal` so no browser opens, and puts the clipboard back.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
