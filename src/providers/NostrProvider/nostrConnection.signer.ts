@@ -28,10 +28,15 @@ export class NostrConnectionSigner implements ISigner {
     }
 
     await this.close()
-    this.pool = new Nip46Pool(client.relayPool, {
-      urls: new URL(this.connectionString).searchParams.getAll('relay'),
-      acquire: (urls) => client.acquireSignerRelayUrls(urls)
-    })
+    this.pool = new Nip46Pool(
+      client.relayPool,
+      {
+        urls: new URL(this.connectionString).searchParams.getAll('relay'),
+        acquire: (urls) => client.acquireSignerRelayUrls(urls)
+      },
+      // Fork: ignore "no permission" from another signer of the same key.
+      { clientSecretKey: this.clientSecretKey }
+    )
     try {
       this.signer = await NBunkerSigner.fromURI(this.clientSecretKey, this.connectionString, {
         pool: this.pool,

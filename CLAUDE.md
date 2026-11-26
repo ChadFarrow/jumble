@@ -87,6 +87,16 @@ so upstream merges stay clean.
   When the last relay answers, upstream's no-gap rule still applies: shown rows
   older than the newest 100 can go, and load more brings them back in order.
 
+- Remote-signer logins ignore a "no permission" answer
+  (`src/lib/nip46-unknown-refusal.ts`, a hook in `src/lib/nip46-pool.ts`, the key
+  passed by `nostrConnection.signer.ts` and `bunker.signer.ts`). Chad's Clave and
+  Amber hold the same key; Amber answers each request from an app it does not
+  know with exactly `no permission`, before Clave answers, and nostr-tools takes
+  the first answer, so the QR and bunker:// logins failed. The request now waits
+  for the next answer or its 30 s timeout. Chad uses only Clave in Jumble Chad
+  (2026-11-26). Design:
+  `docs/superpowers/specs/2026-11-26-nip46-skip-unknown-refusal-design.md`.
+
 ### Tests
 
 - Unit: `npm test`. CI also runs `npm run lint` and `npm run build`.
@@ -128,6 +138,15 @@ so upstream merges stay clean.
   relay must lose its mark, and its skipped REQs must attach and receive
   events. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB` (default
   ChadF), `JUMBLE_E2E_DEAD_RELAY`, `JUMBLE_E2E_LIVE_RELAY`.
+- Real app, remote signer: `node scripts/fork/e2e-nostrconnect.mjs` (renderer
+  rebuilt first). The script plays the signer with a throwaway key (it refuses
+  `sign_event`, so the app publishes nothing; it sends only kind 24133 events)
+  and logs in by the QR (it reads the `nostrconnect://` URI from the page) and by
+  a `bunker://` link on `wss://relay.powr.build/`. The `-amber` scenarios add a
+  second signer of the same key that answers "no permission" 300 ms first.
+  Env: `JUMBLE_E2E_SCENARIOS`, `JUMBLE_E2E_SCAN_DELAY_MS`. Never send a request
+  to Chad's own key from a test: his Clave and Amber both answer (and Clave shows
+  it to him).
 - Logging in from a test: the app backs localStorage up to main
   (`renderer-state.enc` in userData, 50 ms after a change) and restores a newer
   backup on reload. So clear IndexedDB only from main

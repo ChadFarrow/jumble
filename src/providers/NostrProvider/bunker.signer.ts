@@ -33,10 +33,15 @@ export class BunkerSigner implements ISigner {
     }
 
     await this.close()
-    this.pool = new Nip46Pool(client.relayPool, {
-      urls: bunkerPointer.relays,
-      acquire: (urls) => client.acquireSignerRelayUrls(urls)
-    })
+    this.pool = new Nip46Pool(
+      client.relayPool,
+      {
+        urls: bunkerPointer.relays,
+        acquire: (urls) => client.acquireSignerRelayUrls(urls)
+      },
+      // Fork: ignore "no permission" from another signer of the same key.
+      { clientSecretKey: this.clientSecretKey }
+    )
     try {
       this.signer = NBunkerSigner.fromBunker(this.clientSecretKey, bunkerPointer, {
         pool: this.pool,
