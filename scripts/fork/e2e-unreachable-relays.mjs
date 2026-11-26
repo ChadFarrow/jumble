@@ -12,17 +12,23 @@
 // nos.lol. Reads only: REQs, never EVENTs or COUNTs. It prints every relay it
 // read, and logs out at the end.
 //
-// Two launches of the dev app (jumble-dev data folder). Launch 1 starts with
-// no unreachable-relays.json and a cleared IndexedDB, and waits until the app
-// marks the dead relay. Launch 2 (IndexedDB cleared again) checks that every
-// REQ to it gets EOSE at once and is not closed (it stays registered, to
-// attach if the relay answers again). The test deletes the file at the end.
+// Three launches of the dev app (jumble-dev data folder), each with a cleared
+// IndexedDB. Launch 1 starts with no unreachable-relays.json and waits until
+// the app marks the dead relay. Launch 2 checks that every REQ to it gets EOSE
+// at once and is not closed (it stays registered, to attach if the relay
+// answers again). Launch 3 is the next morning: the test ages that mark by 6 h
+// and also seeds an aged mark on a relay that answers (JUMBLE_E2E_LIVE_RELAY).
+// The dead relay's re-check must fail in the background with no wait; the live
+// relay's re-check must clear its mark, and its skipped REQs must attach and
+// receive events. The test deletes the file at the end.
 //
 // Env:
 //   JUMBLE_E2E_DEAD_RELAY  the relay that gives no answer (default wss://nos.lol/)
+//   JUMBLE_E2E_LIVE_RELAY  a read relay of the npub that answers and holds
+//                          events for it (default wss://chadf.nostr1.com/)
 //   JUMBLE_E2E_NPUB        the account (default: ChadF); the test also times
 //                          its notification REQ, which reads its own relays
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -35,6 +41,7 @@ const { _electron } = require('playwright-core')
 const electronPath = require('electron')
 
 const DEAD = process.env.JUMBLE_E2E_DEAD_RELAY ?? 'wss://nos.lol/'
+const LIVE = process.env.JUMBLE_E2E_LIVE_RELAY ?? 'wss://chadf.nostr1.com/'
 const NPUB =
   process.env.JUMBLE_E2E_NPUB ?? 'npub177fz5zkm87jdmf0we2nz7mm7uc2e7l64uzqrv6rvdrsg8qkrg7yqx0aaq7'
 const PK = nip19.decode(NPUB).data
@@ -42,6 +49,8 @@ const USER_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'jum
 const STORE = path.join(USER_DATA, 'unreachable-relays.json')
 const MARK_WAIT_MS = 45_000
 const WATCH_MS = 12_000
+const MORNING_WATCH_MS = 15_000
+const HOURS_6 = 6 * 60 * 60 * 1000
 
 const results = []
 const record = (name, ok, detail) => {
@@ -79,7 +88,7 @@ async function launch(label) {
   await page.waitForLoadState('domcontentloaded')
 
   const userData = await app.evaluate(
-    async ({ app: electronApp, BrowserWindow, ipcMain, shell, session }, { dead, pk }) => {
+    async ({ app: electronApp, BrowserWindow, ipcMain, shell, session }, { dead, live, pk }) => {
       shell.openExternal = async () => {}
       const w = BrowserWindow.getAllWindows()[0]
       w.setOpacity(0)
@@ -95,8 +104,15 @@ async function launch(label) {
       ipcMain._invokeHandlers.set('relay:subscribe', (e, subId, url, filters) => {
         urls.add(url)
         const notification = filters.some((f) => f['#p']?.includes(pk))
-        if (url === dead || notification) {
-          subs.set(subId, { url, notification, start: Date.now(), eose: null, close: null })
+        if (url === dead || url === live || notification) {
+          subs.set(subId, {
+            url,
+            notification,
+            start: Date.now(),
+            eose: null,
+            close: null,
+            eventsAfterEose: 0
+          })
         }
         return subscribe(e, subId, url, filters)
       })
@@ -105,11 +121,12 @@ async function launch(label) {
         const s = p && typeof p === 'object' ? subs.get(p.subId) : undefined
         if (s && ch === 'relay:sub:eose') s.eose ??= Date.now()
         if (s && ch === 'relay:sub:close') s.close ??= p.reason
+        if (s && ch === 'relay:sub:event' && s.eose !== null) s.eventsAfterEose++
         return send(ch, p)
       }
       return electronApp.getPath('userData')
     },
-    { dead: DEAD, pk: PK }
+    { dead: DEAD, live: LIVE, pk: PK }
   )
   if (userData !== USER_DATA) throw new Error(`unexpected userData ${userData}`)
 
@@ -201,6 +218,73 @@ try {
   record('the file still names the relay', !!readStore()?.[DEAD])
   logs.push(...second.logs)
   await close(second, 'launch 2')
+
+  // Launch 3, the next morning: both marks are 6 h old, so the first read to
+  // each starts its re-check.
+  const aged = Date.now() - HOURS_6
+  writeFileSync(
+    STORE,
+    JSON.stringify({
+      [DEAD]: { markedAt: aged - HOURS_6, checkedAt: aged },
+      [LIVE]: { markedAt: aged - HOURS_6, checkedAt: aged }
+    })
+  )
+  const third = await launch('launch 3')
+  let liveClearedAt = null
+  while (Date.now() - third.t0 < MORNING_WATCH_MS) {
+    if (liveClearedAt === null && readStore() && !readStore()[LIVE]) liveClearedAt = Date.now()
+    await third.page.waitForTimeout(250)
+  }
+  const morning = await third.subs()
+  const deadMorning = morning.filter((s) => s.url === DEAD)
+  const deadWaits = deadMorning.map((s) => (s.eose === null ? null : s.eose - s.start))
+  record(
+    'launch 3: every read to the dead relay gets EOSE at once (< 200 ms)',
+    deadMorning.length > 0 && deadWaits.every((w) => w !== null && w < 200),
+    {
+      count: deadMorning.length,
+      maxMs: deadWaits.includes(null) ? 'not ended' : Math.max(0, ...deadWaits)
+    }
+  )
+  record(
+    'launch 3: none of them is closed',
+    deadMorning.every((s) => s.close === null),
+    { closeReasons: [...new Set(deadMorning.map((s) => s.close).filter(Boolean))] }
+  )
+  const deadRecord = readStore()?.[DEAD]
+  record(
+    "launch 3: the dead relay's re-check ran and kept the mark",
+    !!deadRecord && deadRecord.checkedAt >= third.t0,
+    { checkedMsAfterReload: deadRecord ? deadRecord.checkedAt - third.t0 : null }
+  )
+  record('launch 3: the relay that answers loses its mark', liveClearedAt !== null, {
+    msAfterReload: liveClearedAt === null ? null : liveClearedAt - third.t0
+  })
+  const liveMorning = morning.filter((s) => s.url === LIVE)
+  const attached = liveMorning.filter(
+    (s) => s.eose !== null && s.eose - s.start < 200 && s.eventsAfterEose > 0
+  )
+  record('launch 3: a skipped REQ to it attaches and receives events', attached.length > 0, {
+    reqs: liveMorning.length,
+    skippedThenAttached: attached.length,
+    notification: attached.some((s) => s.notification)
+  })
+  record(
+    'launch 3: no REQ to it is closed',
+    liveMorning.every((s) => s.close === null),
+    { closeReasons: [...new Set(liveMorning.map((s) => s.close).filter(Boolean))] }
+  )
+  const morningNotif = morning.filter((s) => s.notification)
+  const morningStart = morningNotif.length
+    ? Math.min(...morningNotif.map((s) => s.start)) - third.t0
+    : null
+  record(
+    'launch 3: the notification REQ starts < 3 s after the reload',
+    morningStart !== null && morningStart < 3000,
+    { msAfterReload: morningStart }
+  )
+  logs.push(...third.logs)
+  await close(third, 'launch 3')
   record('no page errors', logs.length === 0, logs.length ? logs : undefined)
 } finally {
   rmSync(STORE, { force: true })

@@ -116,13 +116,18 @@ so upstream merges stay clean.
   marked nos.lol (below), it comes in about 0.3 s. Never send COUNT to Chad's
   Haven (`podtards.com`): its COUNT handling has a known CPU loop.
 - Real app, unreachable relays: `node scripts/fork/e2e-unreachable-relays.mjs`
-  (renderer rebuilt first). Two launches of the dev app, logged in read-only
+  (renderer rebuilt first). Three launches of the dev app, logged in read-only
   with an npub. Launch 1 starts with no `unreachable-relays.json` and waits until
   the app marks `JUMBLE_E2E_DEAD_RELAY` (default `wss://nos.lol/`; it must give
   no answer from the test machine). Launch 2 checks that every REQ to it gets
   EOSE in < 200 ms and is not closed, and that the notification REQ starts
-  < 3 s after the reload. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB`
-  (default ChadF), `JUMBLE_E2E_DEAD_RELAY`.
+  < 3 s after the reload. Launch 3 (the next morning) ages that mark by 6 h and
+  seeds an aged mark on `JUMBLE_E2E_LIVE_RELAY` (default
+  `wss://chadf.nostr1.com/`, a read relay of the npub that answers): the dead
+  relay's re-check must run in the background and keep the mark; the live
+  relay must lose its mark, and its skipped REQs must attach and receive
+  events. It deletes the file at the end. Env: `JUMBLE_E2E_NPUB` (default
+  ChadF), `JUMBLE_E2E_DEAD_RELAY`, `JUMBLE_E2E_LIVE_RELAY`.
 - Logging in from a test: the app backs localStorage up to main
   (`renderer-state.enc` in userData, 50 ms after a change) and restores a newer
   backup on reload. So clear IndexedDB only from main

@@ -57,17 +57,20 @@ three-attempt counter never reaches 3 for nos.lol.) Not marked:
 - an attempt during which no other relay completed a handshake (the network was
   not shown to work).
 
-**What a mark does.** `ManagedRelay.subscribe` asks `readDecision(url)`. For a
-marked relay it settles the REQ in a microtask, EOSE then close, with the reason
-`relay connection skipped: no answer recently` (a transport failure, so the
-renderer records no read rejection), and opens no socket. A `close()` before the
-microtask silences it.
+**What a mark does.** `ManagedRelay.subscribe` asks `readDecision(url)` when it
+has no open connection. For a marked relay it sends EOSE in a microtask and
+opens no socket. The REQ stays registered (no close), so a later handshake to
+that relay (a re-check or a publish) attaches it. A `close()` before the
+microtask silences it. A failed attempt to a marked relay is not retried; its
+REQs get EOSE and stay registered. (First version: EOSE then close with a skip
+reason; changed after the final review, see below.)
 
-**Re-check.** A read to a marked relay whose last check is `RECHECK_AFTER_MS` =
-5 min old or more still ends at once, and also starts one background connect
-(`withRelay` with an empty operation). Success clears the mark; failure re-arms
-it. The online event (`setNetworkOnline(true)` after offline) makes every
-re-check due now. So a mark never expires into a wait.
+**Re-check.** A read (or a relay health check) to a marked relay whose last
+check is old enough still ends at once, and also starts one background connect
+(`withRelay` with an empty operation). Old enough: `FIRST_RECHECK_AFTER_MS` =
+30 s for a new mark, then `RECHECK_AFTER_MS` = 5 min. Success clears the mark;
+failure re-arms it. The online event (`setNetworkOnline(true)` after offline)
+makes every re-check due now. So a mark never expires into a wait.
 
 **What clears a mark.** Any completed handshake to that relay: a re-check, a
 publish or an auth.
