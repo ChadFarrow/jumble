@@ -1,6 +1,7 @@
 import type { IRelayPool } from '@/types/relay-pool'
 import { AbstractSimplePool, type SubscribeManyParams } from 'nostr-tools/abstract-pool'
 import type { Event, Filter } from 'nostr-tools'
+import { createUnknownRefusalCheck } from './nip46-unknown-refusal'
 import { verifyEvent } from './nostr-verifier'
 import { subscribeRelays } from './relay-subscription'
 import { normalizeUrl } from './url'
@@ -13,13 +14,19 @@ export class Nip46Pool extends AbstractSimplePool {
   private configuredUrls: Set<string>
   private closers = new Set<() => void>()
   private disposed = false
+  // Fork: drops a refusal from another signer of the same key (Amber).
+  private isUnknownRefusal?: (event: Event) => boolean
 
   constructor(
     private readonly managedPool: IRelayPool,
-    private readonly permissions?: { urls: string[]; acquire: (urls: string[]) => () => void }
+    private readonly permissions?: { urls: string[]; acquire: (urls: string[]) => () => void },
+    options?: { clientSecretKey?: Uint8Array }
   ) {
     super({ verifyEvent, maxWaitForConnection: 10_000 })
     this.configuredUrls = new Set(permissions?.urls.map(normalizeUrl))
+    if (options?.clientSecretKey) {
+      this.isUnknownRefusal = createUnknownRefusalCheck(options.clientSecretKey)
+    }
   }
 
   private acquire(urls: string[]) {
@@ -40,8 +47,20 @@ export class Nip46Pool extends AbstractSimplePool {
     const seen = new Set<string>()
     const reasons: { url: string; reason: string }[] = []
     const onauth = params.onauth
+    const isUnknownRefusal = this.isUnknownRefusal
     const sub = subscribeRelays(this.managedPool, urls.map(normalizeUrl), [filter], {
-      onevent: params.onevent,
+      onevent:
+        isUnknownRefusal && params.onevent
+          ? (event) => {
+              if (isUnknownRefusal(event)) {
+                console.warn(
+                  '[nip46] ignored a refusal from another signer of this key that does not know this app'
+                )
+                return
+              }
+              params.onevent?.(event)
+            }
+          : params.onevent,
       alreadyHaveEvent: (id) => {
         if (params.alreadyHaveEvent?.(id) || seen.has(id)) return true
         seen.add(id)
