@@ -32,6 +32,10 @@ still adds its events when it answers, but it no longer holds back the others.
 
 - The list must not shrink or flash while relays answer (for example, drop the saved
   notifications because one fast relay returned only a few recent events).
+  Exception (ruling after review, 2026-11-26): when the last relay answers,
+  upstream's no-gap rule still removes shown rows older than the newest 100; load
+  more brings them back in order. Keeping them would leave a gap that hides
+  notifications in the middle of the list.
 - No extra system notifications or unread bumps for events that are only being loaded.
 
 ## Approaches
@@ -51,10 +55,11 @@ still adds its events when it answers, but it no longer holds back the others.
 
 - `onEvents(events, eosed)` in `_start`:
   - both cases: drop the account's own events (as today);
-  - `eosed === false` and events not empty: `this.events = mergeTimelines([filtered,
-    this.events])` (dedupes the same event), pass the events to
-    `threadService.addRepliesToThread` and `stuffStatsService.updateStuffStatsByEvents`
-    (both skip events they already have), then `emitDataChanged()`. No
+  - `eosed === false`: cap the result at the subscription limit (100; on refresh the
+    client replays its whole in-memory timeline), keep only ids not shown yet, and
+    stop when none is left. Else `this.events = mergeTimelines([fresh, this.events])`,
+    pass only the fresh events to `threadService.addRepliesToThread` and
+    `stuffStatsService.updateStuffStatsByEvents`, then `emitDataChanged()`. No
     `emitNewEvent`, so no system notification;
   - `eosed === true`: unchanged (`mergeWithStored`, `until`, `initialLoading = false`).
 - The loading bar stays until the last relay answers, as today.
@@ -65,10 +70,12 @@ still adds its events when it answers, but it no longer holds back the others.
   partial results show at once; saved notifications stay when a partial result is
   short; `initialLoading` and `hasMore()` change only at the final result; own events
   are dropped; a result for an account that is no longer current is ignored.
-- Real app (`scripts/fork/e2e-notifications.mjs`): a fresh data folder, Chad's npub
-  read-only, the real relays; the main process holds one relay's answer back for 8 s.
-  Before the change the first notification shows after about 8 s; after it, in about
-  the time of the fastest relay.
+- Real app (`scripts/fork/e2e-notifications.mjs`): the jumble-dev data folder,
+  cleared first (the dev main process forces that folder), Chad's npub read-only,
+  the real relays; the main process holds one relay's answer back for 8 s. Before
+  the change the first notification shows after about 8 s; after it, in about the
+  time of the fastest relay. Then a refresh (a smoke check: it also passes on the
+  old code, because saved rows show at once).
 
 ## Left to the builder
 

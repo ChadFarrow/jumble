@@ -24,7 +24,11 @@ so upstream merges stay clean.
   folder (`~/Library/Application Support/Jumble Chad`) and Keychain item
   ("Jumble Chad Safe Storage"). It has no publish target, so the build has no
   `app-update.yml`, and `electron/main/update-config.ts` keeps the updater off:
-  upstream releases never replace it. It is ad-hoc signed and not notarized.
+  upstream releases never replace it. It is ad-hoc signed and not notarized. Its designated
+  requirement is a `cdhash`, so each rebuild is a new app to the Keychain:
+  on the first open after an install, macOS can ask for access to "Jumble Chad
+  Safe Storage". Tell Chad to choose Always Allow (Deny leaves his saved login
+  unreadable).
   Chad signs in to it himself (nsec with Jumble's password). Never touch
   upstream's `~/Library/Application Support/jumble` or its Keychain item.
 - **Dev runs use `~/Library/Application Support/jumble-dev`** (`app.isPackaged === false`).
@@ -63,8 +67,10 @@ so upstream merges stay clean.
   `node scripts/fork/e2e-context-menu.mjs`. For the built app, set
   `JUMBLE_E2E_APP="$PWD/release/chad-<version>/mac-arm64/Jumble Chad.app/Contents/MacOS/Jumble Chad"`;
   it then runs with a temporary `--user-data-dir` and checks that auto-update is
-  off. A packaged run creates the "Jumble Chad Safe Storage" Keychain item: delete
-  it after a test if Chad has not opened the app yet. It drives the dev app with
+  off. A packaged run creates the "Jumble Chad Safe Storage" Keychain item. Delete
+  it after a test only while `~/Library/Application Support/Jumble Chad` does
+  not exist (Chad has not opened the app). Once it exists, the item holds his
+  saved login: never delete it, and do not run packaged tests that could touch it. It drives the dev app with
   Playwright's `_electron`, keeps the window invisible and click-through,
   replaces `shell.openExternal` so no browser opens, and puts the clipboard back.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
