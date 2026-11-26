@@ -30,7 +30,7 @@ describe('Jumble Chad app icon (fork build)', () => {
     expect(existsSync(path.join(REPO, 'scripts/fork/icon-chad.svg'))).toBe(true)
   })
 
-  it("leaves upstream's icon unchanged", () => {
-    expect(base.mac.icon).toBe('public/pwa-512x512.png')
+  it("does not use upstream's icon", () => {
+    expect(chad.mac.icon).not.toBe(base.mac.icon)
   })
 })

@@ -44,7 +44,8 @@ so upstream merges stay clean.
 
 - App icon: a "C" in the Jumble "J" style (`scripts/fork/icon-chad.svg`, rendered
   to `scripts/fork/icon-chad.png`, 1024 px, with
-  `qlmanage -t -s 1024 -o <dir> scripts/fork/icon-chad.svg`), set as `mac.icon` in
+  `qlmanage -t -s 1024 -o <dir> scripts/fork/icon-chad.svg && mv <dir>/icon-chad.svg.png scripts/fork/icon-chad.png`),
+  set as `mac.icon` in
   `scripts/fork/electron-builder.chad.cjs`, so the Dock tells Jumble Chad from
   Jumble. Upstream's icon (`public/pwa-512x512.png`) is unchanged. The 16 and 32 px
   entries of the built `icon.icns` show a few yellow pixels after `iconutil`
