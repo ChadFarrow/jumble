@@ -47,6 +47,12 @@ so upstream merges stay clean.
   `href`, so they get no Copy Link; an `<a>` to the app's own origin would be
   copied as `https://jumble.social/...`.
 
+- Notifications do not wait for the slowest read relay
+  (`src/services/notification.service.ts`): each relay's events are merged into
+  the list when that relay answers (EOSE). The loading bar and "load more" still
+  wait for the last relay (or the 10 s EOSE timeout). Upstream drops these
+  partial results.
+
 ### Tests
 
 - Unit: `npm test`. CI also runs `npm run lint` and `npm run build`.
@@ -60,6 +66,18 @@ so upstream merges stay clean.
   replaces `shell.openExternal` so no browser opens, and puts the clipboard back.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
   before a real-app run.
+- Real app, notifications: `node scripts/fork/e2e-notifications.mjs` (renderer
+  rebuilt first). It clears the jumble-dev IndexedDB and localStorage, logs in
+  read-only with an npub (no key: it cannot publish; it sends REQs only), holds
+  back one read relay's answer for 8 s in the main process and checks that the
+  first notifications show before it. Env: `JUMBLE_E2E_NPUB`,
+  `JUMBLE_E2E_SLOW_RELAY` (default `wss://hist.nostr.land/`, must be one of the
+  npub's read relays), `JUMBLE_E2E_SLOW_MS` (default 8000). On a cold start the
+  notification REQ comes about 10 s after the reload: the account's relay-list
+  and profile requests go to `BIG_RELAY_URLS`, and the app waits for
+  `wss://nos.lol/`, which does not answer from Chad's home network (measured
+  2026-11-26), until the 10 s EOSE timeout. Never send COUNT to Chad's Haven (`podtards.com`): its COUNT handling
+  has a known CPU loop.
 - On macOS a role item (`copy`, `paste` ...) sends its action to the key window,
   like Edit > Copy; `MenuItem.click()` from a script does nothing for it. The
   test window is not key (making it key would take the user's keyboard focus),
