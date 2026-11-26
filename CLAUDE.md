@@ -24,7 +24,11 @@ so upstream merges stay clean.
   folder (`~/Library/Application Support/Jumble Chad`) and Keychain item
   ("Jumble Chad Safe Storage"). It has no publish target, so the build has no
   `app-update.yml`, and `electron/main/update-config.ts` keeps the updater off:
-  upstream releases never replace it. It is ad-hoc signed and not notarized.
+  upstream releases never replace it. It is ad-hoc signed and not notarized. Its designated
+  requirement is a `cdhash`, so each rebuild is a new app to the Keychain:
+  on the first open after an install, macOS can ask for access to "Jumble Chad
+  Safe Storage". Tell Chad to choose Always Allow (Deny leaves his saved login
+  unreadable).
   Chad signs in to it himself (nsec with Jumble's password). Never touch
   upstream's `~/Library/Application Support/jumble` or its Keychain item.
 - **Dev runs use `~/Library/Application Support/jumble-dev`** (`app.isPackaged === false`).
@@ -47,6 +51,15 @@ so upstream merges stay clean.
   `href`, so they get no Copy Link; an `<a>` to the app's own origin would be
   copied as `https://jumble.social/...`.
 
+- Notifications do not wait for the slowest read relay
+  (`src/services/notification.service.ts`): each relay's events are merged into
+  the list when that relay answers (EOSE). The loading bar and "load more" still
+  wait for the last relay (or the 10 s EOSE timeout). Upstream drops these
+  partial results. Each partial result is capped at 100 events and only new
+  ids are added (on pull-to-refresh the client replays its whole timeline).
+  When the last relay answers, upstream's no-gap rule still applies: shown rows
+  older than the newest 100 can go, and load more brings them back in order.
+
 ### Tests
 
 - Unit: `npm test`. CI also runs `npm run lint` and `npm run build`.
@@ -54,12 +67,26 @@ so upstream merges stay clean.
   `node scripts/fork/e2e-context-menu.mjs`. For the built app, set
   `JUMBLE_E2E_APP="$PWD/release/chad-<version>/mac-arm64/Jumble Chad.app/Contents/MacOS/Jumble Chad"`;
   it then runs with a temporary `--user-data-dir` and checks that auto-update is
-  off. A packaged run creates the "Jumble Chad Safe Storage" Keychain item: delete
-  it after a test if Chad has not opened the app yet. It drives the dev app with
+  off. A packaged run creates the "Jumble Chad Safe Storage" Keychain item. Delete
+  it after a test only while `~/Library/Application Support/Jumble Chad` does
+  not exist (Chad has not opened the app). Once it exists, the item holds his
+  saved login: never delete it, and do not run packaged tests that could touch it. It drives the dev app with
   Playwright's `_electron`, keeps the window invisible and click-through,
   replaces `shell.openExternal` so no browser opens, and puts the clipboard back.
   `npm run build` (web) overwrites `dist/`, so rebuild the Electron renderer
   before a real-app run.
+- Real app, notifications: `node scripts/fork/e2e-notifications.mjs` (renderer
+  rebuilt first). It clears the jumble-dev IndexedDB and localStorage, logs in
+  read-only with an npub (no key: it cannot publish; it sends REQs only), holds
+  back one read relay's answer for 8 s in the main process and checks that the
+  first notifications show before it. Env: `JUMBLE_E2E_NPUB`,
+  `JUMBLE_E2E_SLOW_RELAY` (default `wss://hist.nostr.land/`, must be one of the
+  npub's read relays), `JUMBLE_E2E_SLOW_MS` (default 8000). On a cold start the
+  notification REQ comes about 10 s after the reload: the account's relay-list
+  and profile requests go to `BIG_RELAY_URLS`, and the app waits for
+  `wss://nos.lol/`, which does not answer from Chad's home network (measured
+  2026-11-26), until the 10 s EOSE timeout. Never send COUNT to Chad's Haven (`podtards.com`): its COUNT handling
+  has a known CPU loop.
 - On macOS a role item (`copy`, `paste` ...) sends its action to the key window,
   like Edit > Copy; `MenuItem.click()` from a script does nothing for it. The
   test window is not key (making it key would take the user's keyboard focus),
