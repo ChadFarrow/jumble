@@ -7,7 +7,8 @@
 //   ("Jumble Chad Safe Storage"); the installed upstream Jumble keeps its data;
 // - no publish target, so no app-update.yml and no auto-update from upstream
 //   releases (see electron/main/update-config.ts);
-// - ad-hoc signed and not notarized: a local build for this Mac only.
+// - ad-hoc signed and not notarized: a local build for this Mac only;
+// - its own icon, a "C" in the Jumble style (scripts/fork/icon-chad.svg).
 const base = require('../../electron-builder.config.cjs')
 
 module.exports = {
@@ -24,6 +25,9 @@ module.exports = {
     identity: '-',
     notarize: false,
     target: [{ target: 'dir', arch: ['arm64'] }],
+    // A "C" in the Jumble "J" style, so the Dock tells the two apps apart.
+    // Source: scripts/fork/icon-chad.svg.
+    icon: 'scripts/fork/icon-chad.png',
     artifactName: 'Jumble-Chad-mac-${arch}.${ext}'
   }
 }

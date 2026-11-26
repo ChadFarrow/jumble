@@ -1,0 +1,16 @@
+<!-- Jumble Chad app icon (fork): the Jumble "J" style (bold slanted glyph, thin
+     white cut over a bottom crescent) with a "C". Render: qlmanage -t -s 1024 -o <dir> icon-chad.svg && mv <dir>/icon-chad.svg.png icon-chad.png -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#fff"/>
+  <defs>
+    <mask id="open" maskUnits="userSpaceOnUse" x="-500" y="-500" width="2500" height="2500">
+      <rect x="-500" y="-500" width="2500" height="2500" fill="#fff"/>
+      <path d="M512 500 L1400 -245 L1400 1245 Z" fill="#000"/>
+    </mask>
+  </defs>
+  <g transform="translate(134 24) skewX(-15)">
+    <path fill="#000" fill-rule="evenodd" mask="url(#open)"
+      d="M267 500 a245 345 0 1 0 490 0 a245 345 0 1 0 -490 0 Z M410 500 a125 205 0 1 0 250 0 a125 205 0 1 0 -250 0 Z"/>
+    <path d="M272 660 Q444 812 640 818" stroke="#fff" stroke-width="17" fill="none"/>
+  </g>
+</svg>
