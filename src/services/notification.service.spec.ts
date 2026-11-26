@@ -143,6 +143,74 @@ describe('notificationService partial relay results', () => {
     expect(notificationService.hasMore()).toBe(true)
   })
 
+  it('caps a replayed timeline at the subscription limit', async () => {
+    // On restart, the client replays its whole in-memory timeline (up to 2000
+    // refs, every loaded page) as one partial result.
+    await notificationService.start(ME)
+    const replay = Array.from({ length: 150 }, (_, i) => evt(`r${i}`, 10_000 - i))
+
+    lastOnEvents()(replay, false)
+
+    expect(notificationService.getEvents()).toHaveLength(100)
+    expect(notificationService.getEvents()[0].id).toBe(replay[0].id)
+  })
+
+  it('does not duplicate a saved event that shares its second with another', async () => {
+    // IndexedDB returns same-second events larger id first; compareEvents
+    // orders them the other way.
+    const x = evt('aa', 500)
+    const y = evt('bb', 500)
+    mocks.stored = [y, x]
+    await notificationService.start(ME)
+
+    lastOnEvents()([x], false)
+
+    const shown = notificationService.getEvents().map((e) => e.id)
+    expect(new Set(shown).size).toBe(shown.length)
+    expect(shown).toHaveLength(2)
+  })
+
+  it('emits nothing when a later relay adds no new event', async () => {
+    // Each partial result carries every event received so far.
+    await notificationService.start(ME)
+    const listener = vi.fn()
+    const off = notificationService.onDataChanged(listener)
+
+    lastOnEvents()([e1], false)
+    lastOnEvents()([e1], false)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(threadService.addRepliesToThread).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  it('keeps the final list gap-free: rows older than the final window wait for load more', async () => {
+    // A fast, sparse relay showed old rows; the final result (newest of all
+    // relays) is newer than all of them. As upstream does for saved rows, they
+    // go, so no notification is hidden in a gap; load more brings them back.
+    await notificationService.start(ME)
+    const a1 = evt('a1', 100)
+    const a2 = evt('a2', 200)
+    const n1 = evt('n1', 800)
+    const n2 = evt('n2', 900)
+    lastOnEvents()([a2, a1], false)
+
+    lastOnEvents()([n2, n1], true)
+
+    expect(ids()).toEqual(['n2', 'n1'])
+    expect(notificationService.getUntil()).toBe(799)
+  })
+
+  it('keeps shown rows that overlap the final window', async () => {
+    mocks.stored = [s2, s1]
+    await notificationService.start(ME)
+    lastOnEvents()([e9], false)
+
+    lastOnEvents()([e9, e3, evt('e0', 150)], true)
+
+    expect(ids()).toEqual(['e9', 'e3', 's2', 'e0', 's1'])
+  })
+
   it('gives partial events to the thread and stats services', async () => {
     await notificationService.start(ME)
 

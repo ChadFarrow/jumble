@@ -180,10 +180,16 @@ class NotificationService {
             // dead read relay does not hold back the list (up to the 10 s EOSE
             // timeout). A union with what is shown, so the saved notifications stay;
             // loading and `until` still wait for the last relay below.
-            if (filteredEvents.length === 0) return
-            this.events = mergeTimelines([filteredEvents, this.events])
-            threadService.addRepliesToThread(filteredEvents)
-            stuffStatsService.updateStuffStatsByEvents(filteredEvents)
+            // Each call carries every event so far (on restart, the whole replayed
+            // timeline), so cap it and keep only events not shown yet.
+            const known = new Set(this.events.map((e) => e.id))
+            const fresh = filteredEvents
+              .slice(0, SUBSCRIPTION_LIMIT)
+              .filter((evt) => !known.has(evt.id))
+            if (fresh.length === 0) return
+            this.events = mergeTimelines([fresh, this.events])
+            threadService.addRepliesToThread(fresh)
+            stuffStatsService.updateStuffStatsByEvents(fresh)
             this.emitDataChanged()
             return
           }

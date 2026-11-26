@@ -51,7 +51,10 @@ so upstream merges stay clean.
   (`src/services/notification.service.ts`): each relay's events are merged into
   the list when that relay answers (EOSE). The loading bar and "load more" still
   wait for the last relay (or the 10 s EOSE timeout). Upstream drops these
-  partial results.
+  partial results. Each partial result is capped at 100 events and only new
+  ids are added (on pull-to-refresh the client replays its whole timeline).
+  When the last relay answers, upstream's no-gap rule still applies: shown rows
+  older than the newest 100 can go, and load more brings them back in order.
 
 ### Tests
 

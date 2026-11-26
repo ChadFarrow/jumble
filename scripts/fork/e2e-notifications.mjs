@@ -152,16 +152,17 @@ try {
       const bar = marker?.nextElementSibling
       return {
         found: !!marker,
-        loading: !!bar?.classList.contains('h-0.5') && !!bar.querySelector(':scope > .animate-shimmer'),
+        loading:
+          !!bar?.classList.contains('h-0.5') && !!bar.querySelector(':scope > .animate-shimmer'),
         groups: document.querySelectorAll('div.bg-border.sticky.z-20').length
       }
     })
 
   // Wait for the notification subscriptions; time everything from their REQ.
   const notifSubs = () =>
-    app.evaluate(() => [...globalThis.__notifSubs.values()]).then((all) =>
-      all.filter((s) => s.start >= t0)
-    )
+    app
+      .evaluate(() => [...globalThis.__notifSubs.values()])
+      .then((all) => all.filter((s) => s.start >= t0))
   let reqStart = null
   while (Date.now() - t0 < 30000) {
     const subs = await notifSubs()
@@ -221,6 +222,53 @@ try {
     }
   )
   record('the list still shows notifications at the end', last.found && last.groups > 0, last)
+
+  // Refresh (the list's refresh button): the client replays its in-memory
+  // timeline as a partial result, and the slow relay is held back again.
+  const before = (await notifSubs()).length
+  const clicked = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => b.offsetParent && b.querySelector('svg.lucide-refresh-ccw')
+    )
+    btn?.click()
+    return !!btn
+  })
+  record('the refresh button is there', clicked)
+  let req2 = null
+  const t1 = Date.now()
+  while (clicked && Date.now() - t1 < 10000) {
+    const subs2 = await notifSubs()
+    if (subs2.length > before) {
+      req2 = Math.min(...subs2.slice(before).map((s) => s.start))
+      break
+    }
+    await page.waitForTimeout(50)
+  }
+  let shown2 = null
+  let gone2 = null
+  while (req2 !== null && Date.now() - req2 < WATCH_MS) {
+    const st = await readList()
+    if (shown2 === null && st.groups > 0) shown2 = Date.now()
+    if (shown2 !== null && !st.loading) {
+      gone2 = Date.now()
+      break
+    }
+    await page.waitForTimeout(50)
+  }
+  record(
+    `after a refresh, notifications show before the slow relay answers (< ${SLOW_MS - 2000} ms)`,
+    req2 !== null && shown2 !== null && shown2 - req2 < SLOW_MS - 2000,
+    { msAfterReq: req2 === null || shown2 === null ? null : shown2 - req2 }
+  )
+  last = await readList()
+  record(
+    'after a refresh, loading ends and the list shows notifications',
+    gone2 !== null && last.groups > 0,
+    {
+      goneMsAfterReq: req2 === null || gone2 === null ? null : gone2 - req2,
+      ...last
+    }
+  )
 } catch (e) {
   record('test ran to the end', false, e.message.split('\n')[0])
 } finally {
