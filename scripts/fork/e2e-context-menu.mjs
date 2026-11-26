@@ -12,7 +12,7 @@
 // shell.openExternal is replaced, so a click never opens Chad's browser.
 // Chad's clipboard is saved first and put back at the end.
 import { createRequire } from 'node:module'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,10 +34,17 @@ const record = (name, ok, detail) => {
   )
 }
 
+// JUMBLE_E2E_APP=<path to the packaged executable> tests a packaged build
+// (for example "release/chad-<v>/mac-arm64/Jumble Chad.app/Contents/MacOS/Jumble Chad").
+// It then runs with a temporary data folder, so the app's real data stays untouched.
+const PACKAGED = process.env.JUMBLE_E2E_APP
+const USER_DATA = PACKAGED
+  ? realpathSync(mkdtempSync(path.join(os.tmpdir(), 'jumble-ctx-data-')))
+  : null
 const app = await _electron.launch({
-  executablePath: electronPath,
+  executablePath: PACKAGED ?? electronPath,
   args: [
-    REPO,
+    ...(PACKAGED ? [`--user-data-dir=${USER_DATA}`] : [REPO]),
     '--mute-audio',
     '--disable-renderer-backgrounding',
     '--disable-backgrounding-occluded-windows',
@@ -104,7 +111,21 @@ try {
   )
   clipboardSaved = true
   record('audio is muted', setup.muted)
-  record('dev run uses its own data folder', setup.userData.endsWith('jumble-dev'), setup.userData)
+  if (PACKAGED) {
+    record(
+      'packaged run uses the temporary data folder',
+      setup.userData === USER_DATA,
+      setup.userData
+    )
+    const update = await page.evaluate(() => window.electron?.update?.getState())
+    record('packaged run: auto-update is off', update?.supported === false, update)
+  } else {
+    record(
+      'dev run uses its own data folder',
+      setup.userData.endsWith('jumble-dev'),
+      setup.userData
+    )
+  }
   record(
     'app menu has Edit > Copy and Paste (keyboard Cmd+C/V)',
     setup.editMenuRoles?.includes('copy') && setup.editMenuRoles.includes('paste'),
@@ -564,6 +585,7 @@ try {
   const errors = logs.filter((l) => /pageerror|Failed to copy/.test(l))
   if (errors.length) console.log(errors.join('\n'))
   rmSync(OUT, { recursive: true, force: true })
+  if (USER_DATA) rmSync(USER_DATA, { recursive: true, force: true })
   const failed = results.filter((r) => !r.ok).length
   console.log(`DONE ${results.length - failed}/${results.length} passed`)
   process.exitCode = failed ? 1 : 0

@@ -24,6 +24,7 @@ import { RendererStorageStore } from './renderer-storage-store.js'
 import { SecretsStore } from './secrets-store.js'
 import { MigratingStoreCrypto, SafeStorageCrypto } from './store-crypto.js'
 import { ElectronSystemNotificationService } from './system-notification.js'
+import { hasUpdateConfig } from './update-config.js'
 import { Updater } from './updater.js'
 import { attachWindowStatePersistence, loadWindowState } from './window-state.js'
 
@@ -91,7 +92,9 @@ let rendererStorage: RendererStorageStore | null = null
 const isFlatpak =
   process.env.FLATPAK_ID === 'com.codytseng.jumble' || process.env.container === 'flatpak'
 const systemNotification = new ElectronSystemNotificationService()
-const updater = new Updater(app.isPackaged && !isFlatpak, systemNotification)
+// A build with no publish target (the fork's "Jumble Chad" build) has no
+// app-update.yml, so upstream releases cannot replace it.
+const updater = new Updater(app.isPackaged && !isFlatpak && hasUpdateConfig(), systemNotification)
 // Tiny http://127.0.0.1 server that hosts the YouTube IFrame shim page so
 // embedded YT players have an http(s) parent origin (the SPA itself runs on
 // app://, which YT rejects with player error 153).
