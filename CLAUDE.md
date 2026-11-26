@@ -42,6 +42,14 @@ so upstream merges stay clean.
 
 ### Fork features
 
+- App icon: a "C" in the Jumble "J" style (`scripts/fork/icon-chad.svg`, rendered
+  to `scripts/fork/icon-chad.png`, 1024 px, with
+  `qlmanage -t -s 1024 -o <dir> scripts/fork/icon-chad.svg`), set as `mac.icon` in
+  `scripts/fork/electron-builder.chad.cjs`, so the Dock tells Jumble Chad from
+  Jumble. Upstream's icon (`public/pwa-512x512.png`) is unchanged. The 16 and 32 px
+  entries of the built `icon.icns` show a few yellow pixels after `iconutil`
+  decoding; upstream's own release build has the same, so it comes from the tools.
+
 - Right-click menu (`electron/main/context-menu.ts`): Copy for selected text;
   Cut/Copy/Paste/Select All and spelling suggestions in text fields; Copy Link
   for web links; Copy Image, Copy Image Address and Save Image As. An image
