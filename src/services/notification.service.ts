@@ -175,6 +175,18 @@ class NotificationService {
         onEvents: (events, eosed) => {
           if (this.currentPubkey !== pubkey) return
           const filteredEvents = events.filter((evt) => getEventAuthorPubkey(evt) !== pubkey)
+          if (!eosed) {
+            // Fork: show each relay's events when that relay answers, so one slow or
+            // dead read relay does not hold back the list (up to the 10 s EOSE
+            // timeout). A union with what is shown, so the saved notifications stay;
+            // loading and `until` still wait for the last relay below.
+            if (filteredEvents.length === 0) return
+            this.events = mergeTimelines([filteredEvents, this.events])
+            threadService.addRepliesToThread(filteredEvents)
+            stuffStatsService.updateStuffStatsByEvents(filteredEvents)
+            this.emitDataChanged()
+            return
+          }
           if (eosed) {
             this.events = this.mergeWithStored(filteredEvents)
             this.until =
